@@ -10,4 +10,5 @@ setup(
     author_email='kyboone@uw.edu',
     license='BSD',
     packages=['parsnip'],
+    data_files=[('data', ['apj425122t3_mrt.txt'])]
 )

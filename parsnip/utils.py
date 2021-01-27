@@ -1,32 +1,27 @@
 import avocado
 import os
-import sys
 import sncosmo
 
 
-def load_dataset(name):
+def load_dataset(name, *args, **kwargs):
     """Load a dataset using avocado"""
     from .astronomical_object import ParsnipObject
-    dataset = avocado.Dataset.load(name, object_class=ParsnipObject)
+    dataset = avocado.Dataset.load(name, object_class=ParsnipObject, *args, **kwargs)
     return dataset
 
 
 def load_panstarrs_bandpasses():
     """Download and load the panstarrs bandpasses into sncosmo"""
+    # Figure out where the bandpass data file ended up.
+    dirname = os.path.dirname
+    package_root_directory = dirname(dirname(os.path.abspath(__file__)))
 
-    path = os.path.join(avocado.settings['data_directory'], 'ps1_bandpasses_mrt.txt')
-    url = 'http://iopscience.iop.org/0004-637X/750/2/99/suppdata/apj425122t3_mrt.txt'
+    path = os.path.join(package_root_directory, 'data', 'apj425122t3_mrt.txt')
 
-    # Download the bandpasses if we don't have them already.
-    if not os.path.exists(path):
-        print("Downloading PanSTARRS bandpasses...")
-        sys.stdout.flush()
-        avocado.utils.download_file(url, path)
-    
-    # Load them into sncosmo
+    # Load the bandpasses into sncosmo
     from astropy.io import ascii
 
-    band_data = ascii.read('../panstarrs/bands/apj425122t3_mrt.txt')
+    band_data = ascii.read(path)
 
     wave = band_data['Wave'] * 10.
 
@@ -40,3 +35,7 @@ def load_panstarrs_bandpasses():
     for band_name, band_data in bands.items():
         band = sncosmo.Bandpass(wave, band_data, name=band_name)
         sncosmo.registry.register(band, force=True)
+
+
+# Automatically load bandpasses when parsnip is first imported
+load_panstarrs_bandpasses()

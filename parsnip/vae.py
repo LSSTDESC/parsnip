@@ -1,13 +1,9 @@
-from matplotlib import pyplot as plt
 from tqdm import tqdm
 import numpy as np
-import pandas as pd
-import scipy.stats
 import os
 import sys
 
 from astropy.table import Table, vstack
-from astropy.stats import biweight_location
 import extinction
 import sncosmo
 
@@ -15,19 +11,24 @@ import torch
 import torch.utils.data
 from torch import nn, optim
 from torch.nn import functional as F
-from .astronomical_object import ParsnipObject
 
 
 class ParsnipDataLoader():
-    def __init__(self, dataset, autoencoder):
+    def __init__(self, dataset, autoencoder, shuffle=False):
         self.dataset = dataset
         self.autoencoder = autoencoder
+        self.shuffle = shuffle
+
+        if self.shuffle:
+            self._ordered_objects = np.random.permutation(self.dataset.objects)
+        else:
+            self._ordered_objects = self.dataset.objects
 
     def __len__(self):
         return len(self.dataset.objects)
 
     def __getitem__(self, index):
-        objects = self.dataset.objects[index]
+        objects = self._ordered_objects[index]
         return self.autoencoder.get_data(objects)
 
     def __iter__(self):
@@ -53,29 +54,42 @@ class ParsnipDataLoader():
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, dilation, batchnorm=False,
-                 concat=True):
+                 concat=True, maxpool_input=True):
         super().__init__()
 
         self.concat = concat
 
         self.conv = nn.Conv1d(in_channels, out_channels, 5, dilation=dilation,
                               padding=2*dilation)
+
         if batchnorm:
             self.batchnorm = nn.BatchNorm1d(out_channels)
         else:
             self.batchnorm = None
 
-    def forward(self, input_data, x):
+        if maxpool_input:
+            # Apply a max pool to the input to keep track of where we had observations.
+            self.maxpool_input = nn.MaxPool1d(5, 1, dilation=dilation)
+
+            # Padding is broken for dilated max pools in pytorch 1.7.0. Do it manually.
+            self.maxpool_input_pad = nn.ConstantPad1d(2*dilation, 0.)
+        else:
+            self.maxpool_input = None
+
+    def forward(self, pool_input, x):
         out = self.conv(x)
+        
+        if self.maxpool_input is not None:
+            pool_input = self.maxpool_input(self.maxpool_input_pad(pool_input))
 
         if self.batchnorm is not None:
             out = self.batchnorm(out)
 
         out = F.relu(out)
         if self.concat:
-            out = torch.cat([input_data, out], 1)
+            out = torch.cat([pool_input, out], 1)
 
-        return out
+        return pool_input, out
 
 
 class LightCurveAutoencoder(nn.Module):
@@ -84,7 +98,8 @@ class LightCurveAutoencoder(nn.Module):
                  band_oversampling=51, time_window=300, time_pad=100, time_sigma=20.,
                  magsys='ab', error_floor=0.01, learning_rate=1e-3,
                  min_learning_rate=1e-5, penalty=1e-3, correct_mw_extinction=False,
-                 correct_background=False, augment=True):
+                 correct_background=False, augment=True, augment_mask_fraction=0.,
+                 maxpool_input=True):
         super().__init__()
 
         # Figure out if CUDA is available and if we want to use it.
@@ -109,10 +124,12 @@ class LightCurveAutoencoder(nn.Module):
         self.correct_mw_extinction = correct_mw_extinction
         self.correct_background = correct_background
         self.augment = augment
+        self.augment_mask_fraction = augment_mask_fraction
+        self.maxpool_input = maxpool_input
 
         # Setup the bands
         self.bands = bands
-        self.band_map = {j:i for i, j in enumerate(bands)}
+        self.band_map = {j: i for i, j in enumerate(bands)}
         self._setup_band_weights()
         self._calculate_band_wave_effs()
 
@@ -330,6 +347,13 @@ class LightCurveAutoencoder(nn.Module):
         grid_fluxerr = torch.stack(grid_fluxerr)
         redshifts = torch.FloatTensor(redshifts)
 
+        if self.augment and self.augment_mask_fraction > 0.:
+            # Throw out some of the observations in the input. We keep them in the
+            # output for comparisons. This is a version of dropout.
+            mask = torch.rand_like(grid_flux) < self.augment_mask_fraction
+            grid_flux[mask] = 0.
+            grid_fluxerr[mask] = 0.
+
         # Pad the compare data so that they all have the same length.
         compare_data = nn.utils.rnn.pad_sequence(compare_data, batch_first=True)
         compare_data = compare_data.permute(0, 2, 1)
@@ -344,7 +368,6 @@ class LightCurveAutoencoder(nn.Module):
         grid_weights[~mask] = 0.
         if self.augment:
             # If we are augmenting, also add noise to the fluxes.
-            nonzero_count = int(torch.sum(mask > 0))
             grid_flux[mask] += torch.normal(0, floor_fluxerr[mask])
 
         # Build a weight for the compare data
@@ -369,14 +392,15 @@ class LightCurveAutoencoder(nn.Module):
         input_size = len(self.bands) * 2 + 1
 
         self.conv_encodes = nn.ModuleList([
-            ConvBlock(input_size, 20, 1),
-            ConvBlock(input_size + 20, 20, 1),
-            ConvBlock(input_size + 20, 40, 2),
-            ConvBlock(input_size + 40, 40, 4),
-            ConvBlock(input_size + 40, 60, 8),
-            ConvBlock(input_size + 60, 80, 16),
-            ConvBlock(input_size + 80, 100, 32),
-            ConvBlock(input_size + 100, 120, 64, concat=False),
+            ConvBlock(input_size, 20, 1, maxpool_input=self.maxpool_input),
+            ConvBlock(input_size + 20, 20, 1, maxpool_input=self.maxpool_input),
+            ConvBlock(input_size + 20, 40, 2, maxpool_input=self.maxpool_input),
+            ConvBlock(input_size + 40, 40, 4, maxpool_input=self.maxpool_input),
+            ConvBlock(input_size + 40, 60, 8, maxpool_input=self.maxpool_input),
+            ConvBlock(input_size + 60, 80, 16, maxpool_input=self.maxpool_input),
+            ConvBlock(input_size + 80, 100, 32, maxpool_input=self.maxpool_input),
+            ConvBlock(input_size + 100, 120, 64, maxpool_input=self.maxpool_input,
+                      concat=False),
         ])
 
         self.encode_1 = nn.Conv1d(120, 40, 1)
@@ -394,8 +418,9 @@ class LightCurveAutoencoder(nn.Module):
 
     def encode(self, input_data):
         e = input_data
+        pool_input = input_data
         for conv_encode in self.conv_encodes:
-            e = conv_encode(input_data, e)
+            pool_input, e = conv_encode(pool_input, e)
 
         e1 = F.relu(self.encode_1(e))
         e2 = self.encode_2(e1)
@@ -499,7 +524,8 @@ class LightCurveAutoencoder(nn.Module):
         weight = compare_data[:, 3]
 
         # Analytically evaluate the conditional distribution for the amplitude.
-        amplitude_mu, amplitude_logvar = self.compute_amplitude(weight, model_flux, flux)
+        amplitude_mu, amplitude_logvar = self.compute_amplitude(weight, model_flux,
+                                                                flux)
         amplitude = self.reparameterize(amplitude_mu, amplitude_logvar)
         model_flux = model_flux * amplitude[:, None]
         model_spectra = model_spectra * amplitude[:, None, None]
@@ -527,7 +553,7 @@ class LightCurveAutoencoder(nn.Module):
         # Regularization of spectra
         diff = (
             (model_spectra[:, 1:, :] - model_spectra[:, :-1, :])
-            / (model_spectra[:, 1:, :] + model_spectra[:, :-1, :]) 
+            / (model_spectra[:, 1:, :] + model_spectra[:, :-1, :])
         )
         penalty = self.penalty * torch.sum(diff**2)
 
@@ -542,8 +568,8 @@ class LightCurveAutoencoder(nn.Module):
         return nll + penalty + kld + amp_prob
 
     def fit(self, dataset, max_epochs=1000, augments=1):
-        loader = ParsnipDataLoader(dataset, self)
         while self.epoch < max_epochs:
+            loader = ParsnipDataLoader(dataset, self, shuffle=True)
             self.train()
             train_loss = 0
             train_count = 0
@@ -632,8 +658,8 @@ class LightCurveAutoencoder(nn.Module):
             data[key] = val
 
         # Get rid of extra dimensions
-        # TODO: this is slow and ragged arrays are terrible... is there a better way to
-        # do it?
+        # This is slow and ragged arrays are terrible... is there a better way to do
+        # it? Not a major issue since this isn't called very often...
         batch_size = len(input_data)
         compare_data = np.zeros(batch_size, dtype=object)
         band_indices = np.zeros(batch_size, dtype=object)
@@ -748,87 +774,3 @@ class LightCurveAutoencoder(nn.Module):
                                                                pred_bands, count)
 
         return model_spectra[..., 0]
-
-    def plot_light_curve(self, obj, count=100, show_model=True, show_bands=True,
-                         percentile=68, ax=None, **kwargs):
-        if ax is None:
-            fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
-
-        model_times, model_flux, data = self.predict_light_curve(obj, count, **kwargs)
-
-        input_data, compare_data, redshifts, band_indices = data
-
-        band_indices = band_indices.detach().cpu().numpy()
-        compare_data = compare_data.detach().cpu().numpy()
-
-        time, flux, fluxerr, weight = compare_data
-
-        max_model = 0.
-
-        for band_idx, band_name in enumerate(self.band_map):
-            c = f'C{band_idx}'
-
-            match = band_indices == band_idx
-            ax.errorbar(time[match], flux[match], fluxerr[match], fmt='o', c=c,
-                        label=band_name, elinewidth=1)
-
-            if band_idx == 0:
-                label = 'Model'
-            else:
-                label = None
-
-            if not show_model:
-                # Don't show the model
-                band_max_model = np.max(model_flux[band_idx])
-            elif count == 0:
-                # Single prediction
-                ax.plot(model_times, model_flux[band_idx], c=c, label=label)
-                band_max_model = np.max(model_flux[band_idx])
-            elif show_bands:
-                # Multiple predictions, show error bands.
-                percentile_offset = (100 - percentile) / 2.
-                flux_median = np.median(model_flux[:, band_idx], axis=0)
-                flux_min = np.percentile(model_flux[:, band_idx], percentile_offset,
-                                         axis=0)
-                flux_max = np.percentile(model_flux[:, band_idx],
-                                         100 - percentile_offset, axis=0)
-                ax.plot(model_times, flux_median, c=c, label=label)
-                ax.fill_between(model_times, flux_min, flux_max, color=c, alpha=0.3)
-                band_max_model = np.max(flux_median)
-            else:
-                # Multiple predictions, show raw light curves
-                ax.plot(model_times, model_flux[:, band_idx].T, c=c, alpha=0.1)
-                band_max_model = np.max(model_flux)
-
-            max_model = max(max_model, band_max_model)
-
-        ax.set_ylim(-0.2 * max_model, 1.2 * max_model)
-
-        ax.legend()
-        ax.set_xlabel('Time (days)')
-        ax.set_ylabel('Flux')
-
-    def plot_spectrum(self, obj, time, count=100, show_bands=True, percentile=68,
-                      ax=None, c=None, label=None):
-        if ax is None:
-            fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
-
-        model_spectra = self.predict_spectrum(obj, time, count)
-
-        if count == 0:
-            # Single prediction
-            ax.plot(self.model_wave, model_spectra, c=c, label=label)
-        elif show_bands:
-            # Multiple predictions, show error bands.
-            percentile_offset = (100 - percentile) / 2.
-            flux_median = np.median(model_spectra, axis=0)
-            flux_min = np.percentile(model_spectra, percentile_offset, axis=0)
-            flux_max = np.percentile(model_spectra, 100 - percentile_offset, axis=0)
-            ax.plot(self.model_wave, flux_median, c=c, label=label)
-            ax.fill_between(self.model_wave, flux_min, flux_max, color=c, alpha=0.3)
-        else:
-            # Multiple predictions, show raw light curves
-            ax.plot(self.model_wave, model_spectra.T, c=c, alpha=0.1)
-
-        ax.set_xlabel('Wavelength ($\AA$)')
-        ax.set_ylabel('Flux')

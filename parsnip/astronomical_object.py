@@ -1,22 +1,16 @@
 from matplotlib import pyplot as plt
-from tqdm import tqdm
 import numpy as np
-import pandas as pd
 import scipy.stats
-import sys
 
-from astropy.table import Table, vstack
 from astropy.stats import biweight_location
 import avocado
 import extinction
-import sncosmo
 
 import torch
 import torch.utils.data
-from torch import nn, optim
-from torch.nn import functional as F
 
 SIDEREAL_SCALE = 86400. / 86164.0905
+
 
 class ParsnipObject(avocado.AstronomicalObject):
     """An astronomical object, with metadata and a light curve.
@@ -95,7 +89,7 @@ class ParsnipObject(avocado.AstronomicalObject):
             obs['flux_error'] = np.sqrt(obs['flux_error']**2 + noise_means**2)
 
         # Create a new light curve object
-        new_obj = AstronomicalObject(metadata, obs)
+        new_obj = ParsnipObject(metadata, obs)
 
         return new_obj
 
