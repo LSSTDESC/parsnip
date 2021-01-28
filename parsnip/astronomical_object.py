@@ -150,30 +150,12 @@ class ParsnipObject(avocado.AstronomicalObject):
         obs['flux'] /= self.scale
         obs['flux_error'] /= self.scale
 
-        # Grid up the flux and flux error.
-        # Note that this clobbers any observations that are on the same night, so bin
-        # those up before hand if there are a lot of them.
-        grid_flux = torch.zeros(len(autoencoder.bands), pad_window)
-        grid_fluxerr = torch.zeros(len(autoencoder.bands), pad_window)
-        grid_flux[obs['band_indices'].values, obs['time_indices'].values] = \
-            torch.FloatTensor(obs['flux'].values)
-        grid_fluxerr[obs['band_indices'].values, obs['time_indices'].values] = \
-            torch.FloatTensor(obs['flux_error'].values)
-
-        # Build the grid of observations to compare to.
-        compare_data = torch.FloatTensor([
-            obs['grid_times'].values,
-            obs['flux'].values,
-            obs['flux_error'].values
-        ])
-        compare_band_indices = torch.LongTensor(obs['band_indices'].values)
-
-        # Save results
-        self.preprocessed_observations = obs
-        self.grid_flux = grid_flux
-        self.grid_fluxerr = grid_fluxerr
-        self.compare_data = compare_data
-        self.compare_band_indices = compare_band_indices
+        # Build torch tensors for all of the variables that we will need.
+        self.grid_times = torch.FloatTensor(obs['grid_times'].values)
+        self.grid_flux = torch.FloatTensor(obs['flux'].values)
+        self.grid_flux_error = torch.FloatTensor(obs['flux_error'].values)
+        self.grid_band_indices = torch.LongTensor(obs['band_indices'].values)
+        self.grid_time_indices = torch.LongTensor(obs['time_indices'].values)
 
     def determine_time_grid(self):
         """Determine the time grid that will be used for the observations."""

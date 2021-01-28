@@ -316,64 +316,93 @@ class LightCurveAutoencoder(nn.Module):
             time_shifts = torch.zeros(len(objects), dtype=torch.long)
             amp_scales = torch.ones(len(objects))
 
-        grid_flux = []
-        grid_fluxerr = []
-        compare_data = []
+        times = []
+        fluxes = []
+        flux_errors = []
         band_indices = []
+        time_indices = []
+        batch_indices = []
+        compare_data = []
         redshifts = []
 
-        for obj, time_shift, amp_scale in zip(objects, time_shifts, amp_scales):
+        for idx, obj in enumerate(objects):
             # Shift and scale the grid data
-            start_idx = self.time_pad + time_shift
-            end_idx = start_idx + self.time_window
-            obj_grid_flux = amp_scale * obj.grid_flux[:, start_idx:end_idx]
-            obj_grid_fluxerr = amp_scale * obj.grid_fluxerr[:, start_idx:end_idx]
+            obj_times = obj.grid_times + time_shifts[idx]
+            obj_flux = obj.grid_flux * amp_scales[idx]
+            obj_flux_error = obj.grid_flux_error * amp_scales[idx]
+            obj_band_indices = obj.grid_band_indices
+            obj_time_indices = obj.grid_time_indices + time_shifts[idx]
+            obj_batch_indices = torch.ones_like(obj_band_indices) * idx
 
-            grid_flux.append(obj_grid_flux)
-            grid_fluxerr.append(obj_grid_fluxerr)
+            # Compute the weight that will be used for comparing the model to the input
+            # data. We use the observed error with an error floor.
+            obj_compare_weight = 1. / (obj_flux_error**2 + self.error_floor**2)
 
-            # Shift and scale the compare data
-            obj_compare_data = obj.compare_data.detach().clone()
-            obj_compare_data[0] -= time_shift
-            obj_compare_data[1] *= amp_scale
-            obj_compare_data[2] *= amp_scale
+            # Stack all of the data that will be used for comparisons.
+            obj_compare_data = torch.vstack([
+                obj_times,
+                obj_flux,
+                obj_flux_error,
+                obj_compare_weight,
+            ])
 
+            times.append(obj_times)
+            fluxes.append(obj_flux)
+            flux_errors.append(obj_flux_error)
+
+            band_indices.append(obj_band_indices)
+            time_indices.append(obj_time_indices)
+            batch_indices.append(obj_batch_indices)
             compare_data.append(obj_compare_data.T)
-            band_indices.append(obj.compare_band_indices)
 
             redshifts.append(obj.metadata['redshift'])
 
-        grid_flux = torch.stack(grid_flux)
-        grid_fluxerr = torch.stack(grid_fluxerr)
+        # Pad all of the compare data to have the same shape.
+        compare_data = nn.utils.rnn.pad_sequence(compare_data, batch_first=True)
+        compare_data = compare_data.permute(0, 2, 1)
+        compare_band_indices = nn.utils.rnn.pad_sequence(band_indices, batch_first=True)
         redshifts = torch.FloatTensor(redshifts)
+
+        # Gather the input data.
+        fluxes = torch.cat(fluxes)
+        flux_errors = torch.cat(flux_errors)
+        band_indices = torch.cat(band_indices)
+        time_indices = torch.cat(time_indices)
+        batch_indices = torch.cat(batch_indices)
+
+        # Throw out inputs that are outside of our window.
+        mask = (time_indices >= 0) & (time_indices < self.time_window)
 
         if self.augment and self.augment_mask_fraction > 0.:
             # Throw out some of the observations in the input. We keep them in the
-            # output for comparisons. This is a version of dropout.
-            mask = torch.rand_like(grid_flux) < self.augment_mask_fraction
-            grid_flux[mask] = 0.
-            grid_fluxerr[mask] = 0.
+            # output for comparisons. This is effectively a version of dropout.
+            mask &= torch.rand_like(fluxes) < self.augment_mask_fraction
 
-        # Pad the compare data so that they all have the same length.
-        compare_data = nn.utils.rnn.pad_sequence(compare_data, batch_first=True)
-        compare_data = compare_data.permute(0, 2, 1)
-        band_indices = nn.utils.rnn.pad_sequence(band_indices, batch_first=True)
+        fluxes = fluxes[mask]
+        flux_errors = flux_errors[mask]
+        band_indices = band_indices[mask]
+        time_indices = time_indices[mask]
+        batch_indices = batch_indices[mask]
 
-        # Add the error floor.
-        error_floor = self.error_floor
-        mask = grid_fluxerr > 0
-        floor_fluxerr = torch.ones_like(grid_flux) * error_floor
-        floor_fluxerr[~mask] = 1.
-        grid_weights = floor_fluxerr**2 / (grid_fluxerr**2 + floor_fluxerr**2)
-        grid_weights[~mask] = 0.
+        # Add the error floor to the flux errors.
+        add_flux_errors = self.error_floor
+
         if self.augment:
-            # If we are augmenting, also add noise to the fluxes.
-            grid_flux[mask] += torch.normal(0, floor_fluxerr[mask])
+            # If we are augmenting, add the error floor to the fluxes
+            fluxes += torch.normal(0, add_flux_errors, size=fluxes.shape)
 
-        # Build a weight for the compare data
-        compare_weight = 1. / (compare_data[:, 2]**2 + error_floor**2)
-        compare_weight[compare_data[:, 2] == 0.] = 0.
-        compare_data = torch.cat([compare_data, compare_weight[:, None, :]], axis=1)
+        # Use the logarithm of the error as a weight. We scale things so that 1
+        # represents a measurement with an error of 1, 2 represents a measurement with
+        # an error of 0.1, etc. We set the error for unobserved points to be 0
+        # (equivalent to an error of 10 which would be extremely large).
+        weights = 1 + -0.5 * torch.log10(flux_errors**2 + add_flux_errors**2)
+
+        # Build a grid for the input
+        grid_flux = torch.zeros(len(objects), len(self.bands), self.time_window)
+        grid_weights = torch.zeros_like(grid_flux)
+
+        grid_flux[batch_indices, band_indices, time_indices] = fluxes
+        grid_weights[batch_indices, band_indices, time_indices] = weights
 
         # Stack the input data
         input_data = torch.cat([
@@ -383,9 +412,10 @@ class LightCurveAutoencoder(nn.Module):
         ], axis=1)
 
         if single:
-            return (input_data[0], compare_data[0], redshifts[0], band_indices[0])
+            return (input_data[0], compare_data[0], redshifts[0],
+                    compare_band_indices[0])
         else:
-            return input_data, compare_data, redshifts, band_indices
+            return input_data, compare_data, redshifts, compare_band_indices
 
     def build_model(self):
         """Build the model"""
