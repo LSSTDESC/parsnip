@@ -6,9 +6,6 @@ from astropy.stats import biweight_location
 import avocado
 import extinction
 
-import torch
-import torch.utils.data
-
 SIDEREAL_SCALE = 86400. / 86164.0905
 
 
@@ -96,7 +93,7 @@ class ParsnipObject(avocado.AstronomicalObject):
     def preprocess(self, autoencoder):
         """Preprocess the light curve and package it as needed for the autoencoder"""
         # Align the observations to a grid in sidereal time.
-        self.determine_time_grid()
+        reference_time = self._determine_time_grid()
 
         # Map each band to its corresponding index.
         obs = self.observations.copy()
@@ -104,7 +101,7 @@ class ParsnipObject(avocado.AstronomicalObject):
 
         # Cut out any observations that are outside of the window that we are
         # considering.
-        grid_times = self.time_to_grid(self.observations['time'])
+        grid_times = self.time_to_grid(self.observations['time'], reference_time)
         pad_window = autoencoder.time_window + 2 * autoencoder.time_pad
         center_time = autoencoder.time_pad + autoencoder.center_time_bin
         time_indices = np.round(grid_times).astype(int) + center_time
@@ -146,18 +143,26 @@ class ParsnipObject(avocado.AstronomicalObject):
         # the median time of the five highest signal-to-noise observations to avoid
         # outliers.
         s2n_mask = np.argsort(obs['flux'] / obs['flux_error'])[-5:]
-        self.scale = np.median(obs['flux'].iloc[s2n_mask])
-        obs['flux'] /= self.scale
-        obs['flux_error'] /= self.scale
+        scale = np.median(obs['flux'].iloc[s2n_mask])
+        obs['flux'] /= scale
+        obs['flux_error'] /= scale
 
-        # Build torch tensors for all of the variables that we will need.
-        self.grid_times = torch.FloatTensor(obs['grid_times'].values)
-        self.grid_flux = torch.FloatTensor(obs['flux'].values)
-        self.grid_flux_error = torch.FloatTensor(obs['flux_error'].values)
-        self.grid_band_indices = torch.LongTensor(obs['band_indices'].values)
-        self.grid_time_indices = torch.LongTensor(obs['time_indices'].values)
+        # Save the result
+        preprocess_data = {
+            'reference_time': reference_time,
+            'scale': scale,
+            'time': obs['grid_times'].values,
+            'flux': obs['flux'].values,
+            'flux_error': obs['flux_error'].values,
+            'band_indices': obs['band_indices'].values,
+            'time_indices': obs['time_indices'].values,
+        }
 
-    def determine_time_grid(self):
+        self.preprocess_data = preprocess_data
+
+        return preprocess_data
+
+    def _determine_time_grid(self):
         """Determine the time grid that will be used for the observations."""
         time = self.observations['time']
         sidereal_time = time * SIDEREAL_SCALE
@@ -184,15 +189,20 @@ class ParsnipObject(avocado.AstronomicalObject):
 
         # Convert back to a reference time in the original units. This reference time
         # corresponds to the reference of the grid in sidereal time.
-        self.reference_time = ((max_time + sidereal_offset) / SIDEREAL_SCALE)
+        reference_time = ((max_time + sidereal_offset) / SIDEREAL_SCALE)
+        return reference_time
 
-    def time_to_grid(self, time):
+    def time_to_grid(self, time, reference_time=None):
         """Convert a time in the original units to one on the internal grid"""
-        return (time - self.reference_time) * SIDEREAL_SCALE
+        if reference_time is None:
+            reference_time = self.preprocess_data['reference_time']
+        return (time - reference_time) * SIDEREAL_SCALE
 
-    def grid_to_time(self, grid_time):
+    def grid_to_time(self, grid_time, reference_time=None):
         """Convert a time on the internal grid to a time in the original units"""
-        return grid_time / SIDEREAL_SCALE + self.reference_time
+        if reference_time is None:
+            reference_time = self.preprocess_data['reference_time']
+        return grid_time / SIDEREAL_SCALE + reference_time
 
     def plot(self):
         plt.figure()

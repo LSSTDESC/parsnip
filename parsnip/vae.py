@@ -1,4 +1,6 @@
 from tqdm import tqdm
+import functools
+import multiprocessing
 import numpy as np
 import os
 import sys
@@ -11,6 +13,8 @@ import torch
 import torch.utils.data
 from torch import nn, optim
 from torch.nn import functional as F
+
+from .astronomical_object import ParsnipObject
 
 
 class ParsnipDataLoader():
@@ -78,7 +82,7 @@ class ConvBlock(nn.Module):
 
     def forward(self, pool_input, x):
         out = self.conv(x)
-        
+
         if self.maxpool_input is not None:
             pool_input = self.maxpool_input(self.maxpool_input_pad(pool_input))
 
@@ -154,6 +158,27 @@ class LightCurveAutoencoder(nn.Module):
 
         # Send the model to the desired device
         self.to(self.device)
+
+    def to(self, device):
+        """Send the model to the given device"""
+        new_device = torch.device(device if torch.cuda.is_available() else 'cpu')
+
+        if self.device == new_device:
+            # Already on that device
+            return
+
+        self.device = new_device
+
+        # Send all of the weights
+        super().to(self.device)
+
+        # Send all of the variables that we create manually
+        self.color_law = self.color_law.to(self.device)
+        self.input_times = self.input_times.to(self.device)
+
+        self.band_interpolate_locations = \
+            self.band_interpolate_locations.to(self.device)
+        self.band_interpolate_weights = self.band_interpolate_weights.to(self.device)
 
     def _setup_band_weights(self):
         """Setup the interpolation for the band weights used for photometry"""
@@ -283,10 +308,35 @@ class LightCurveAutoencoder(nn.Module):
         print(f"autoencoder photometry: {autoencoder_photometry}")
         print(f"ratio:                  {autoencoder_photometry / sncosmo_photometry}")
 
-    def preprocess(self, dataset):
+    def preprocess(self, dataset, threads=16, chunksize=64):
         """Preprocess a dataset"""
-        for obj in tqdm(dataset.objects):
-            obj.preprocess(self)
+        if threads == 1:
+            # Run on a single core without multiprocessing
+            for obj in tqdm(dataset.objects, file=sys.stdout):
+                obj.preprocess(self)
+        else:
+            # Run with multiprocessing in multiple threads.
+            # For multiprocessing, everything has to be on the CPU. Send the current
+            # model to the CPU, and keep track of where it was.
+            # TODO: all that we need is the settings. Refactor the code so that we
+            # don't have to move the whole model around.
+            current_device = self.device
+            self.to('cpu')
+
+            func = functools.partial(ParsnipObject.preprocess, autoencoder=self)
+
+            with multiprocessing.Pool(threads) as p:
+                data = list(tqdm(p.imap(func, dataset.objects, chunksize=chunksize),
+                                 total=len(dataset.objects),
+                                 file=sys.stdout))
+
+            # The outputs don't get saved since the objects are in a different thread.
+            # Save them manually.
+            for obj, obj_data in zip(dataset.objects, data):
+                obj.preprocess_data = obj_data
+
+            # Move us back to the appropriate device
+            self.to(current_device)
 
     def get_data(self, objects):
         """Extract the data needed from an object or set of objects needed to run the
@@ -306,15 +356,16 @@ class LightCurveAutoencoder(nn.Module):
         redshifts = []
 
         if self.augment:
-            time_shifts = torch.round(torch.clamp(
-                torch.normal(0., self.time_sigma, (len(objects),)),
-                -self.time_pad,
-                self.time_pad,
-            )).type(torch.LongTensor)
-            amp_scales = torch.exp(torch.normal(0, 0.5, (len(objects),)))
+            time_shifts = np.round(
+                np.random.normal(0., self.time_sigma, len(objects))).astype(int)
+            amp_scales = np.exp(np.random.normal(0, 0.5, len(objects)))
         else:
-            time_shifts = torch.zeros(len(objects), dtype=torch.long)
-            amp_scales = torch.ones(len(objects))
+            time_shifts = np.zeros(len(objects), dtype=int)
+            amp_scales = np.ones(len(objects))
+
+        # Extract the data from each object. Numpy is much faster than torch for
+        # vector operations currently, so do as much as we can in numpy before
+        # converting to torch tensors.
 
         times = []
         fluxes = []
@@ -323,28 +374,33 @@ class LightCurveAutoencoder(nn.Module):
         time_indices = []
         batch_indices = []
         compare_data = []
+        compare_band_indices = []
         redshifts = []
 
         for idx, obj in enumerate(objects):
+            data = obj.preprocess_data
+
             # Shift and scale the grid data
-            obj_times = obj.grid_times + time_shifts[idx]
-            obj_flux = obj.grid_flux * amp_scales[idx]
-            obj_flux_error = obj.grid_flux_error * amp_scales[idx]
-            obj_band_indices = obj.grid_band_indices
-            obj_time_indices = obj.grid_time_indices + time_shifts[idx]
-            obj_batch_indices = torch.ones_like(obj_band_indices) * idx
+            obj_times = data['time'] + time_shifts[idx]
+            obj_flux = data['flux'] * amp_scales[idx]
+            obj_flux_error = data['flux_error'] * amp_scales[idx]
+            obj_band_indices = data['band_indices']
+            obj_time_indices = data['time_indices'] + time_shifts[idx]
+            obj_batch_indices = np.ones_like(obj_band_indices) * idx
 
             # Compute the weight that will be used for comparing the model to the input
             # data. We use the observed error with an error floor.
             obj_compare_weight = 1. / (obj_flux_error**2 + self.error_floor**2)
 
-            # Stack all of the data that will be used for comparisons.
-            obj_compare_data = torch.vstack([
+            # Stack all of the data that will be used for comparisons and convert it to
+            # torch tensor.
+            obj_compare_data = torch.FloatTensor(np.vstack([
                 obj_times,
                 obj_flux,
                 obj_flux_error,
                 obj_compare_weight,
-            ])
+            ]))
+            compare_band_indices.append(torch.LongTensor(obj_band_indices))
 
             times.append(obj_times)
             fluxes.append(obj_flux)
@@ -357,18 +413,13 @@ class LightCurveAutoencoder(nn.Module):
 
             redshifts.append(obj.metadata['redshift'])
 
-        # Pad all of the compare data to have the same shape.
-        compare_data = nn.utils.rnn.pad_sequence(compare_data, batch_first=True)
-        compare_data = compare_data.permute(0, 2, 1)
-        compare_band_indices = nn.utils.rnn.pad_sequence(band_indices, batch_first=True)
-        redshifts = torch.FloatTensor(redshifts)
-
         # Gather the input data.
-        fluxes = torch.cat(fluxes)
-        flux_errors = torch.cat(flux_errors)
-        band_indices = torch.cat(band_indices)
-        time_indices = torch.cat(time_indices)
-        batch_indices = torch.cat(batch_indices)
+        fluxes = np.concatenate(fluxes)
+        flux_errors = np.concatenate(flux_errors)
+        band_indices = np.concatenate(band_indices)
+        time_indices = np.concatenate(time_indices)
+        batch_indices = np.concatenate(batch_indices)
+        redshifts = np.array(redshifts)
 
         # Throw out inputs that are outside of our window.
         mask = (time_indices >= 0) & (time_indices < self.time_window)
@@ -376,7 +427,7 @@ class LightCurveAutoencoder(nn.Module):
         if self.augment and self.augment_mask_fraction > 0.:
             # Throw out some of the observations in the input. We keep them in the
             # output for comparisons. This is effectively a version of dropout.
-            mask &= torch.rand_like(fluxes) < self.augment_mask_fraction
+            mask &= np.random.rand(len(fluxes)) < self.augment_mask_fraction
 
         fluxes = fluxes[mask]
         flux_errors = flux_errors[mask]
@@ -389,27 +440,37 @@ class LightCurveAutoencoder(nn.Module):
 
         if self.augment:
             # If we are augmenting, add the error floor to the fluxes
-            fluxes += torch.normal(0, add_flux_errors, size=fluxes.shape)
+            fluxes += np.random.normal(0, add_flux_errors, fluxes.shape)
 
         # Use the logarithm of the error as a weight. We scale things so that 1
         # represents a measurement with an error of 1, 2 represents a measurement with
         # an error of 0.1, etc. We set the error for unobserved points to be 0
         # (equivalent to an error of 10 which would be extremely large).
-        weights = 1 + -0.5 * torch.log10(flux_errors**2 + add_flux_errors**2)
+        weights = 1 + -0.5 * np.log10(flux_errors**2 + add_flux_errors**2)
 
         # Build a grid for the input
-        grid_flux = torch.zeros(len(objects), len(self.bands), self.time_window)
-        grid_weights = torch.zeros_like(grid_flux)
+        grid_flux = np.zeros((len(objects), len(self.bands), self.time_window))
+        grid_weights = np.zeros_like(grid_flux)
 
         grid_flux[batch_indices, band_indices, time_indices] = fluxes
         grid_weights[batch_indices, band_indices, time_indices] = weights
 
         # Stack the input data
-        input_data = torch.cat([
+        input_data = np.concatenate([
             grid_flux,
             grid_weights,
-            redshifts[:, None, None].repeat(1, 1, self.time_window)
+            redshifts[:, None, None].repeat(self.time_window, axis=2)
         ], axis=1)
+
+        # Convert to torch tensors
+        input_data = torch.FloatTensor(input_data)
+        redshifts = torch.FloatTensor(redshifts)
+
+        # Pad all of the compare data to have the same shape.
+        compare_data = nn.utils.rnn.pad_sequence(compare_data, batch_first=True)
+        compare_data = compare_data.permute(0, 2, 1)
+        compare_band_indices = nn.utils.rnn.pad_sequence(compare_band_indices,
+                                                         batch_first=True)
 
         if single:
             return (input_data[0], compare_data[0], redshifts[0],
