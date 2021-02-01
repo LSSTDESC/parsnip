@@ -56,44 +56,41 @@ class ParsnipDataLoader():
         return 1 + (len(self) + 1) // self.autoencoder.batch_size
 
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, dilation, batchnorm=False,
-                 concat=True, maxpool_input=True):
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, dilation):
         super().__init__()
 
-        self.concat = concat
+        self.in_channels = in_channels
+        self.out_channels = out_channels
 
-        self.conv = nn.Conv1d(in_channels, out_channels, 5, dilation=dilation,
-                              padding=2*dilation)
+        if self.out_channels < self.in_channels:
+            raise Exception("out_channels must be >= in_channels.")
 
-        if batchnorm:
-            self.batchnorm = nn.BatchNorm1d(out_channels)
+        self.conv1 = nn.Conv1d(in_channels, out_channels, 3, dilation=dilation,
+                               padding=dilation)
+        self.conv2 = nn.Conv1d(out_channels, out_channels, 3,
+                               dilation=dilation, padding=dilation)
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.relu(out)
+        out = self.conv2(out)
+
+        # Add back in the input. If it is smaller than the output, pad it first.
+        if self.in_channels < self.out_channels:
+            pad_size = self.out_channels - self.in_channels
+            pad_x = F.pad(x, (0, 0, 0, pad_size))
         else:
-            self.batchnorm = None
+            pad_x = x
 
-        if maxpool_input:
-            # Apply a max pool to the input to keep track of where we had observations.
-            self.maxpool_input = nn.MaxPool1d(5, 1, dilation=dilation)
+        # Residual connection
+        out = out + pad_x
 
-            # Padding is broken for dilated max pools in pytorch 1.7.0. Do it manually.
-            self.maxpool_input_pad = nn.ConstantPad1d(2*dilation, 0.)
-        else:
-            self.maxpool_input = None
+        out = self.relu(out)
 
-    def forward(self, pool_input, x):
-        out = self.conv(x)
-
-        if self.maxpool_input is not None:
-            pool_input = self.maxpool_input(self.maxpool_input_pad(pool_input))
-
-        if self.batchnorm is not None:
-            out = self.batchnorm(out)
-
-        out = F.relu(out)
-        if self.concat:
-            out = torch.cat([pool_input, out], 1)
-
-        return pool_input, out
+        return out
 
 
 class LightCurveAutoencoder(nn.Module):
@@ -103,7 +100,7 @@ class LightCurveAutoencoder(nn.Module):
                  magsys='ab', error_floor=0.01, learning_rate=1e-3,
                  min_learning_rate=1e-5, penalty=1e-3, correct_mw_extinction=False,
                  correct_background=False, augment=True, augment_mask_fraction=0.,
-                 maxpool_input=True):
+                 maxpool_input=False):
         super().__init__()
 
         # Figure out if CUDA is available and if we want to use it.
@@ -355,24 +352,17 @@ class LightCurveAutoencoder(nn.Module):
         compare_data = []
         redshifts = []
 
-        if self.augment:
-            time_shifts = np.round(
-                np.random.normal(0., self.time_sigma, len(objects))).astype(int)
-            amp_scales = np.exp(np.random.normal(0, 0.5, len(objects)))
-        else:
-            time_shifts = np.zeros(len(objects), dtype=int)
-            amp_scales = np.ones(len(objects))
-
         # Extract the data from each object. Numpy is much faster than torch for
         # vector operations currently, so do as much as we can in numpy before
         # converting to torch tensors.
 
-        times = []
         fluxes = []
         flux_errors = []
         band_indices = []
         time_indices = []
         batch_indices = []
+        weights = []
+
         compare_data = []
         compare_band_indices = []
         redshifts = []
@@ -380,38 +370,77 @@ class LightCurveAutoencoder(nn.Module):
         for idx, obj in enumerate(objects):
             data = obj.preprocess_data
 
+            # Extract the redshift.
+            redshifts.append(obj.metadata['redshift'])
+
+            if self.augment:
+                time_shift = np.round(np.random.normal(0., self.time_sigma)).astype(int)
+                amp_scale = np.exp(np.random.normal(0, 0.5))
+            else:
+                time_shift = 0
+                amp_scale = 1.
+
             # Shift and scale the grid data
-            obj_times = data['time'] + time_shifts[idx]
-            obj_flux = data['flux'] * amp_scales[idx]
-            obj_flux_error = data['flux_error'] * amp_scales[idx]
+            obj_times = data['time'] + time_shift
+            obj_flux = data['flux'] * amp_scale
+            obj_flux_error = data['flux_error'] * amp_scale
             obj_band_indices = data['band_indices']
-            obj_time_indices = data['time_indices'] + time_shifts[idx]
+            obj_time_indices = data['time_indices'] + time_shift
             obj_batch_indices = np.ones_like(obj_band_indices) * idx
+
+            # Mask out data that is outside of the window of the input.
+            mask = (obj_time_indices >= 0) & (obj_time_indices < self.time_window)
+
+            if self.augment:
+                # Choose a fraction of observations to randomly drop
+                drop_frac = np.random.uniform(0, 0.5)
+                mask[np.random.rand(len(obj_times)) < drop_frac] = False
+
+            # Apply the mask
+            obj_times = obj_times[mask]
+            obj_flux = obj_flux[mask]
+            obj_flux_error = obj_flux_error[mask]
+            obj_band_indices = obj_band_indices[mask]
+            obj_time_indices = obj_time_indices[mask]
+            obj_batch_indices = obj_batch_indices[mask]
+
+            if self.augment:
+                # Add noise to the observations
+                if np.random.rand() < 0.5 and len(obj_flux) > 0:
+                    # Choose an overall scale for the noise from a lognormal
+                    # distribution.
+                    noise_scale = np.random.lognormal(-4., 1.)
+
+                    # Choose the noise levels for each observation from a lognormal
+                    # distribution.
+                    noise_means = np.random.lognormal(np.log(noise_scale), 1.,
+                                                      len(obj_flux))
+
+                    # Add the noise to the observations.
+                    obj_flux = obj_flux + np.random.normal(0., noise_means)
+                    obj_flux_error = np.sqrt(obj_flux_error**2 + noise_means**2)
 
             # Compute the weight that will be used for comparing the model to the input
             # data. We use the observed error with an error floor.
-            obj_compare_weight = 1. / (obj_flux_error**2 + self.error_floor**2)
+            obj_weight = 1. / (obj_flux_error**2 + self.error_floor**2)
 
             # Stack all of the data that will be used for comparisons and convert it to
-            # torch tensor.
+            # a torch tensor.
             obj_compare_data = torch.FloatTensor(np.vstack([
                 obj_times,
                 obj_flux,
                 obj_flux_error,
-                obj_compare_weight,
+                obj_weight,
             ]))
+            compare_data.append(obj_compare_data.T)
             compare_band_indices.append(torch.LongTensor(obj_band_indices))
 
-            times.append(obj_times)
             fluxes.append(obj_flux)
             flux_errors.append(obj_flux_error)
-
             band_indices.append(obj_band_indices)
             time_indices.append(obj_time_indices)
             batch_indices.append(obj_batch_indices)
-            compare_data.append(obj_compare_data.T)
-
-            redshifts.append(obj.metadata['redshift'])
+            weights.append(obj_weight)
 
         # Gather the input data.
         fluxes = np.concatenate(fluxes)
@@ -419,34 +448,8 @@ class LightCurveAutoencoder(nn.Module):
         band_indices = np.concatenate(band_indices)
         time_indices = np.concatenate(time_indices)
         batch_indices = np.concatenate(batch_indices)
+        weights = np.concatenate(weights)
         redshifts = np.array(redshifts)
-
-        # Throw out inputs that are outside of our window.
-        mask = (time_indices >= 0) & (time_indices < self.time_window)
-
-        if self.augment and self.augment_mask_fraction > 0.:
-            # Throw out some of the observations in the input. We keep them in the
-            # output for comparisons. This is effectively a version of dropout.
-            mask &= np.random.rand(len(fluxes)) < self.augment_mask_fraction
-
-        fluxes = fluxes[mask]
-        flux_errors = flux_errors[mask]
-        band_indices = band_indices[mask]
-        time_indices = time_indices[mask]
-        batch_indices = batch_indices[mask]
-
-        # Add the error floor to the flux errors.
-        add_flux_errors = self.error_floor
-
-        if self.augment:
-            # If we are augmenting, add the error floor to the fluxes
-            fluxes += np.random.normal(0, add_flux_errors, fluxes.shape)
-
-        # Use the logarithm of the error as a weight. We scale things so that 1
-        # represents a measurement with an error of 1, 2 represents a measurement with
-        # an error of 0.1, etc. We set the error for unobserved points to be 0
-        # (equivalent to an error of 10 which would be extremely large).
-        weights = 1 + -0.5 * np.log10(flux_errors**2 + add_flux_errors**2)
 
         # Build a grid for the input
         grid_flux = np.zeros((len(objects), len(self.bands), self.time_window))
@@ -455,11 +458,14 @@ class LightCurveAutoencoder(nn.Module):
         grid_flux[batch_indices, band_indices, time_indices] = fluxes
         grid_weights[batch_indices, band_indices, time_indices] = weights
 
+        # Scale the weights so that they are between 0 and 1.
+        grid_weights *= self.error_floor**2
+
         # Stack the input data
         input_data = np.concatenate([
+            redshifts[:, None, None].repeat(self.time_window, axis=2),
             grid_flux,
             grid_weights,
-            redshifts[:, None, None].repeat(self.time_window, axis=2)
         ], axis=1)
 
         # Convert to torch tensors
@@ -481,20 +487,20 @@ class LightCurveAutoencoder(nn.Module):
     def build_model(self):
         """Build the model"""
         input_size = len(self.bands) * 2 + 1
+        # input_size = len(self.bands) * 2 + 1
 
         self.conv_encodes = nn.ModuleList([
-            ConvBlock(input_size, 20, 1, maxpool_input=self.maxpool_input),
-            ConvBlock(input_size + 20, 20, 1, maxpool_input=self.maxpool_input),
-            ConvBlock(input_size + 20, 40, 2, maxpool_input=self.maxpool_input),
-            ConvBlock(input_size + 40, 40, 4, maxpool_input=self.maxpool_input),
-            ConvBlock(input_size + 40, 60, 8, maxpool_input=self.maxpool_input),
-            ConvBlock(input_size + 60, 80, 16, maxpool_input=self.maxpool_input),
-            ConvBlock(input_size + 80, 100, 32, maxpool_input=self.maxpool_input),
-            ConvBlock(input_size + 100, 120, 64, maxpool_input=self.maxpool_input,
-                      concat=False),
+            ResidualBlock(input_size, 20, 1),
+            ResidualBlock(20, 20, 1),
+            ResidualBlock(20, 40, 2),
+            ResidualBlock(40, 60, 4),
+            ResidualBlock(60, 80, 8),
+            ResidualBlock(80, 100, 16),
+            ResidualBlock(100, 120, 32),
+            ResidualBlock(120, 140, 64),
         ])
 
-        self.encode_1 = nn.Conv1d(120, 40, 1)
+        self.encode_1 = nn.Conv1d(140, 40, 1)
         self.encode_2 = nn.Conv1d(40, 40, 1)
 
         self.conv_time = nn.Conv1d(40, 1, 1)
@@ -504,14 +510,13 @@ class LightCurveAutoencoder(nn.Module):
         self.fc_encoding_logvar = nn.Linear(40, self.latent_size + 2)
 
         self.decode_1 = nn.Conv1d(self.latent_size + 1, 40, 1)
-        self.decode_2 = nn.Conv1d(40, 40, 1)
-        self.decode_3 = nn.Conv1d(40, self.spectrum_bins, 1)
+        self.decode_2 = nn.Conv1d(40, 80, 1)
+        self.decode_3 = nn.Conv1d(80, self.spectrum_bins, 1)
 
     def encode(self, input_data):
         e = input_data
-        pool_input = input_data
         for conv_encode in self.conv_encodes:
-            pool_input, e = conv_encode(pool_input, e)
+            e = conv_encode(e)
 
         e1 = F.relu(self.encode_1(e))
         e2 = self.encode_2(e1)
@@ -628,6 +633,10 @@ class LightCurveAutoencoder(nn.Module):
         num = torch.sum(weight * model_flux * flux, axis=1)
         denom = torch.sum(weight * model_flux * model_flux, axis=1)
 
+        # With augmentation, can very rarely end up with no light curve points. Handle
+        # that gracefully by setting the amplitude to 0 with a very large uncertainty.
+        denom[denom == 0.] = 1e-5
+
         amplitude_mu = num / denom
         amplitude_logvar = torch.log(1. / denom)
 
@@ -658,7 +667,68 @@ class LightCurveAutoencoder(nn.Module):
 
         return nll + penalty + kld + amp_prob
 
-    def fit(self, dataset, max_epochs=1000, augments=1):
+    def score(self, dataset, rounds=1):
+        """Evaluate the loss function on a given dataset.
+
+        Parameters
+        ----------
+        dataset : `avocado.Dataset`
+            Dataset to run on
+        rounds : int, optional
+            Number of rounds to use for evaluation. VAEs are stochastic, so the loss
+            function is not deterministic. By running for multiple rounds, the
+            uncertainty on the loss function can be decreased. Default 1.
+
+        Returns
+        -------
+        loss
+            Computed loss function
+        """
+        self.eval()
+        loader = ParsnipDataLoader(dataset, self)
+
+        total_loss = 0
+        total_count = 0
+
+        # We score the dataset without augmentation for consistency. Keep track of
+        # whether augmentation was turned on so that we can revert to the previous
+        # state after we're done.
+        augment_state = self.augment
+
+        try:
+            self.augment = False
+
+            # Compute the loss
+            for round in range(rounds):
+                for batch_data in loader:
+                    input_data, compare_data, redshifts, band_indices = batch_data
+
+                    input_data = input_data.to(self.device)
+                    compare_data = compare_data.to(self.device)
+                    redshifts = redshifts.to(self.device)
+                    band_indices = band_indices.to(self.device)
+
+                    encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, \
+                        ref_times, color, encoding, amplitude, model_flux, \
+                        model_spectra = \
+                        self(input_data, compare_data, redshifts, band_indices)
+
+                    loss = self.loss_function(compare_data, encoding_mu,
+                                              encoding_logvar, amplitude_mu,
+                                              amplitude_logvar, amplitude,
+                                              model_flux, model_spectra)
+
+                    total_loss += loss.item()
+                    total_count += len(input_data)
+        finally:
+            # Make sure that we flip the augment switch back to what it started as.
+            self.augment = augment_state
+
+        loss = total_loss / total_count
+
+        return loss
+
+    def fit(self, dataset, max_epochs=1000, augments=1, test_dataset=None):
         while self.epoch < max_epochs:
             loader = ParsnipDataLoader(dataset, self, shuffle=True)
             self.train()
@@ -667,6 +737,7 @@ class LightCurveAutoencoder(nn.Module):
 
             with tqdm(range(loader.num_batches * augments), file=sys.stdout) as pbar:
                 for augment in range(augments):
+                    # Training step
                     for batch_data in loader:
                         input_data, compare_data, redshifts, band_indices = batch_data
 
@@ -692,14 +763,28 @@ class LightCurveAutoencoder(nn.Module):
 
                         train_count += len(input_data)
 
+                        total_loss = train_loss / train_count
+                        batch_loss = loss.item() / len(input_data)
+
                         pbar.set_description(
-                            f'Epoch {self.epoch}: Loss: {train_loss / train_count:.4f} '
-                            f'({loss.item() / len(input_data):.4f})',
+                            f'Epoch {self.epoch:4d}: Loss: {total_loss:8.4f} '
+                            f'({batch_loss:8.4f})',
                             refresh=False
                         )
                         pbar.update()
 
-            pbar.refresh()
+                if test_dataset is not None:
+                    # Calculate the test loss
+                    test_loss = self.score(test_dataset)
+                    pbar.set_description(
+                        f'Epoch {self.epoch:4d}: Loss: {total_loss:8.4f}, '
+                        f'Test loss: {test_loss:8.4f}',
+                    )
+                else:
+                    pbar.set_description(
+                        f'Epoch {self.epoch:4d}: Loss: {total_loss:8.4f}'
+                    )
+                    
             self.scheduler.step(train_loss)
             os.makedirs('./models/', exist_ok=True)
             torch.save(self.state_dict(), f'./models/{self.name}.pt')
@@ -710,6 +795,7 @@ class LightCurveAutoencoder(nn.Module):
                 break
 
             self.epoch += 1
+
 
     def load(self):
         """Load the model weights"""
