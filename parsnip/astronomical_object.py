@@ -102,12 +102,10 @@ class ParsnipObject(avocado.AstronomicalObject):
         # Cut out any observations that are outside of the window that we are
         # considering.
         grid_times = self.time_to_grid(self.observations['time'], reference_time)
-        pad_window = autoencoder.time_window + 2 * autoencoder.time_pad
-        center_time = autoencoder.time_pad + autoencoder.center_time_bin
-        time_indices = np.round(grid_times).astype(int) + center_time
+        time_indices = np.round(grid_times).astype(int) + autoencoder.center_time_bin
         time_mask = (
-            (time_indices >= 0)
-            & (time_indices < pad_window)
+            (time_indices >= -autoencoder.time_pad)
+            & (time_indices < autoencoder.time_window + autoencoder.time_pad)
         )
         obs['grid_times'] = grid_times
         obs['time_indices'] = time_indices

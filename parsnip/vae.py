@@ -3,9 +3,9 @@ import functools
 import multiprocessing
 import numpy as np
 import os
+import pandas as pd
 import sys
 
-from astropy.table import Table, vstack
 import extinction
 import sncosmo
 
@@ -93,14 +93,32 @@ class ResidualBlock(nn.Module):
         return out
 
 
+class Conv1dBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, dilation):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        self.conv = nn.Conv1d(in_channels, out_channels, 5, dilation=dilation,
+                              padding=2*dilation)
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        out = self.conv(x)
+        out = self.relu(out)
+
+        return out
+
+
 class LightCurveAutoencoder(nn.Module):
     def __init__(self, name, bands, device='cpu', batch_size=128, latent_size=3,
                  min_wave=1000., max_wave=11000., spectrum_bins=300, max_redshift=4.,
                  band_oversampling=51, time_window=300, time_pad=100, time_sigma=20.,
                  magsys='ab', error_floor=0.01, learning_rate=1e-3,
                  min_learning_rate=1e-5, penalty=1e-3, correct_mw_extinction=False,
-                 correct_background=False, augment=True, augment_mask_fraction=0.,
-                 maxpool_input=False):
+                 correct_background=False, augment=True, encode_block='residual'):
         super().__init__()
 
         # Figure out if CUDA is available and if we want to use it.
@@ -125,8 +143,7 @@ class LightCurveAutoencoder(nn.Module):
         self.correct_mw_extinction = correct_mw_extinction
         self.correct_background = correct_background
         self.augment = augment
-        self.augment_mask_fraction = augment_mask_fraction
-        self.maxpool_input = maxpool_input
+        self.encode_block = encode_block
 
         # Setup the bands
         self.bands = bands
@@ -489,15 +506,22 @@ class LightCurveAutoencoder(nn.Module):
         input_size = len(self.bands) * 2 + 1
         # input_size = len(self.bands) * 2 + 1
 
+        if self.encode_block == 'conv1d':
+            encode_block = Conv1dBlock
+        elif self.encode_block == 'residual':
+            encode_block = ResidualBlock
+        else:
+            raise Exception(f"Unknown block {self.encode_block}.")
+
         self.conv_encodes = nn.ModuleList([
-            ResidualBlock(input_size, 20, 1),
-            ResidualBlock(20, 20, 1),
-            ResidualBlock(20, 40, 2),
-            ResidualBlock(40, 60, 4),
-            ResidualBlock(60, 80, 8),
-            ResidualBlock(80, 100, 16),
-            ResidualBlock(100, 120, 32),
-            ResidualBlock(120, 140, 64),
+            encode_block(input_size, 20, 1),
+            encode_block(20, 20, 1),
+            encode_block(20, 40, 2),
+            encode_block(40, 60, 4),
+            encode_block(60, 80, 8),
+            encode_block(80, 100, 16),
+            encode_block(100, 120, 32),
+            encode_block(120, 140, 64),
         ])
 
         self.encode_1 = nn.Conv1d(140, 40, 1)
@@ -784,7 +808,7 @@ class LightCurveAutoencoder(nn.Module):
                     pbar.set_description(
                         f'Epoch {self.epoch:4d}: Loss: {total_loss:8.4f}'
                     )
-                    
+
             self.scheduler.step(train_loss)
             os.makedirs('./models/', exist_ok=True)
             torch.save(self.state_dict(), f'./models/{self.name}.pt')
@@ -796,79 +820,68 @@ class LightCurveAutoencoder(nn.Module):
 
             self.epoch += 1
 
-
     def load(self):
         """Load the model weights"""
         self.load_state_dict(torch.load(f'./models/{self.name}.pt', self.device))
 
-    def _predict(self, input_data, compare_data, redshifts, band_indices):
-        # Move everything to the right device
-        input_data = input_data.to(self.device)
-        compare_data = compare_data.to(self.device)
-        redshifts = redshifts.to(self.device)
-        band_indices = band_indices.to(self.device)
-
-        result = self.forward(input_data, compare_data, redshifts, band_indices)
-        result = [i.cpu().detach().numpy() for i in result]
-
-        data = {
-            'input_data': input_data.cpu().detach().numpy(),
-            'compare_data': compare_data.cpu().detach().numpy(),
-            'redshifts': redshifts.cpu().detach().numpy(),
-            'band_indices': band_indices.cpu().detach().numpy(),
-        }
-
-        # Extract result keys
-        keys = [
-            'encoding_mu',
-            'encoding_logvar',
-            'amplitude_mu',
-            'amplitude_logvar',
-            'ref_times',
-            'color',
-            'encoding',
-            'amplitude',
-            'model_flux',
-            'model_spectra',
-        ]
-        for key, val in zip(keys, result):
-            data[key] = val
-
-        # Get rid of extra dimensions
-        # This is slow and ragged arrays are terrible... is there a better way to do
-        # it? Not a major issue since this isn't called very often...
-        batch_size = len(input_data)
-        compare_data = np.zeros(batch_size, dtype=object)
-        band_indices = np.zeros(batch_size, dtype=object)
-        model_flux = np.zeros(batch_size, dtype=object)
-        model_spectra = np.zeros(batch_size, dtype=object)
-        for idx in range(len(input_data)):
-            mask = data['compare_data'][idx, 3] != 0.
-            compare_data[idx] = data['compare_data'][idx, :, mask]
-            band_indices[idx] = data['band_indices'][idx, mask]
-            model_flux[idx] = data['model_flux'][idx, mask]
-            model_spectra[idx] = data['model_spectra'][idx, :, mask]
-        data['compare_data'] = compare_data
-        data['band_indices'] = band_indices
-        data['model_flux'] = model_flux
-        data['model_spectra'] = model_spectra
-
-        # Turn everything into an astropy table
-        tab = Table(data)
-
-        return tab
-
     def predict_dataset(self, dataset):
-        result = []
+        predictions = []
 
         loader = ParsnipDataLoader(dataset, self)
 
-        for batch_data in loader:
-            result.append(self._predict(*batch_data))
+        for input_data, compare_data, redshifts, band_indices in loader:
+            # Run the data through the model.
+            input_data_device = input_data.to(self.device)
+            compare_data_device = compare_data.to(self.device)
+            redshifts_device = redshifts.to(self.device)
+            band_indices_device = band_indices.to(self.device)
 
-        result = vstack(result)
+            result = self.forward(input_data_device, compare_data_device,
+                                  redshifts_device, band_indices_device)
+            result = [i.cpu().detach().numpy() for i in result]
+            encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, ref_times, \
+                color, encoding, amplitude, model_flux, model_spectra = result
+            encoding_err = np.sqrt(np.exp(encoding_logvar))
 
-        return result
+            # Pull out the keys that we care about saving.
+            batch_predictions = {
+                'ref_time': encoding_mu[:, 0] * self.time_sigma,
+                'ref_time_err': encoding_err[:, 0] * self.time_sigma,
+                'color': encoding_mu[:, 1],
+                'color_err': encoding_err[:, 1],
+            }
+
+            for idx in range(self.latent_size):
+                batch_predictions[f's{idx+1}'] = encoding_mu[:, 2 + idx]
+                batch_predictions[f's{idx+1}_err'] = encoding_err[:, 2 + idx]
+
+            # Calculate other features
+            time, flux, fluxerr, weight = [i.detach().numpy() for i in
+                                           compare_data.permute(1, 0, 2)]
+            fluxerr_mask = fluxerr == 0
+            fluxerr[fluxerr_mask] = -1.
+
+            # Signal-to-noise
+            s2n = flux / fluxerr
+            s2n[fluxerr_mask] = 0.
+            batch_predictions['total_s2n'] = np.sqrt(np.sum(s2n**2, axis=1))
+
+            # Number of observations
+            batch_predictions['count'] = np.sum(fluxerr_mask, axis=1)
+
+            # Number of observations with signal-to-noise above some threshold.
+            batch_predictions['count_s2n_3'] = np.sum(s2n > 3, axis=1)
+            batch_predictions['count_s2n_5'] = np.sum(s2n > 5, axis=1)
+
+            predictions.append(pd.DataFrame(batch_predictions))
+
+        predictions = pd.concat(predictions, ignore_index=True)
+
+        # Merge in the metadata
+        predictions.index = dataset.metadata.index
+        predictions = pd.concat([dataset.metadata, predictions], axis=1)
+
+        return predictions
 
     def _predict_single(self, obj, pred_times, pred_bands, count):
         data = self.get_data(obj)
