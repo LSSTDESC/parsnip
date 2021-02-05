@@ -138,10 +138,15 @@ class ParsnipObject(avocado.AstronomicalObject):
             obs['flux_error'] *= extinction_scales
 
         # Scale the light curve so that its peak has an amplitude of roughly 1. We use
-        # the median time of the five highest signal-to-noise observations to avoid
-        # outliers.
-        s2n_mask = np.argsort(obs['flux'] / obs['flux_error'])[-5:]
-        scale = np.median(obs['flux'].iloc[s2n_mask])
+        # the brightest observation with signal-to-noise above 5 if there is one, or
+        # simply the brightest observation otherwise.
+        s2n = obs['flux'] / obs['flux_error']
+        s2n_mask = s2n > 5.
+        if np.any(s2n_mask):
+            scale = np.max(obs['flux'][s2n_mask])
+        else:
+            scale = np.max(obs['flux'])
+
         obs['flux'] /= scale
         obs['flux_error'] /= scale
 
