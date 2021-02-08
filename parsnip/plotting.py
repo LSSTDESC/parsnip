@@ -9,7 +9,7 @@ def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
 
     model_times, model_flux, data = model.predict_light_curve(obj, count, **kwargs)
 
-    input_data, compare_data, redshifts, band_indices = data
+    input_data, compare_data, redshifts, band_indices, amp_scales = data
 
     band_indices = band_indices.detach().cpu().numpy()
     compare_data = compare_data.detach().cpu().numpy()

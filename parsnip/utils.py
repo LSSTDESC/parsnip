@@ -1,6 +1,7 @@
 import avocado
-import os
 import sncosmo
+import numpy as np
+import os
 
 
 def load_dataset(name, *args, **kwargs):
@@ -39,3 +40,16 @@ def load_panstarrs_bandpasses():
 
 # Automatically load bandpasses when parsnip is first imported
 load_panstarrs_bandpasses()
+
+
+def frac_to_mag(fractional_difference):
+    """Convert a fractional difference to a difference in magnitude.
+
+    Because this transformation is asymmetric for larger fractional changes, we
+    take the average of positive and negative differences
+    """
+    pos_mag = 2.5 * np.log10(1 + fractional_difference)
+    neg_mag = 2.5 * np.log10(1 - fractional_difference)
+    mag_diff = (pos_mag - neg_mag) / 2.0
+
+    return mag_diff

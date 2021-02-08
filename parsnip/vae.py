@@ -6,6 +6,7 @@ import os
 import pandas as pd
 import sys
 
+from astropy.cosmology import Planck18
 import extinction
 import sncosmo
 
@@ -15,6 +16,7 @@ from torch import nn, optim
 from torch.nn import functional as F
 
 from .astronomical_object import ParsnipObject
+from .utils import frac_to_mag
 
 
 class ParsnipDataLoader():
@@ -383,6 +385,7 @@ class LightCurveAutoencoder(nn.Module):
         compare_data = []
         compare_band_indices = []
         redshifts = []
+        amp_scales = []
 
         for idx, obj in enumerate(objects):
             data = obj.preprocess_data
@@ -396,6 +399,8 @@ class LightCurveAutoencoder(nn.Module):
             else:
                 time_shift = 0
                 amp_scale = 1.
+
+            amp_scales.append(amp_scale)
 
             # Shift and scale the grid data
             obj_times = data['time'] + time_shift
@@ -467,6 +472,7 @@ class LightCurveAutoencoder(nn.Module):
         batch_indices = np.concatenate(batch_indices)
         weights = np.concatenate(weights)
         redshifts = np.array(redshifts)
+        amp_scales = np.array(amp_scales)
 
         # Build a grid for the input
         grid_flux = np.zeros((len(objects), len(self.bands), self.time_window))
@@ -497,14 +503,13 @@ class LightCurveAutoencoder(nn.Module):
 
         if single:
             return (input_data[0], compare_data[0], redshifts[0],
-                    compare_band_indices[0])
+                    compare_band_indices[0], amp_scales[0])
         else:
-            return input_data, compare_data, redshifts, compare_band_indices
+            return input_data, compare_data, redshifts, compare_band_indices, amp_scales
 
     def build_model(self):
         """Build the model"""
         input_size = len(self.bands) * 2 + 1
-        # input_size = len(self.bands) * 2 + 1
 
         if self.encode_block == 'conv1d':
             encode_block = Conv1dBlock
@@ -725,7 +730,8 @@ class LightCurveAutoencoder(nn.Module):
             # Compute the loss
             for round in range(rounds):
                 for batch_data in loader:
-                    input_data, compare_data, redshifts, band_indices = batch_data
+                    input_data, compare_data, redshifts, band_indices, amp_scales \
+                        = batch_data
 
                     input_data = input_data.to(self.device)
                     compare_data = compare_data.to(self.device)
@@ -763,7 +769,8 @@ class LightCurveAutoencoder(nn.Module):
                 for augment in range(augments):
                     # Training step
                     for batch_data in loader:
-                        input_data, compare_data, redshifts, band_indices = batch_data
+                        input_data, compare_data, redshifts, band_indices, amp_scales \
+                            = batch_data
 
                         input_data = input_data.to(self.device)
                         compare_data = compare_data.to(self.device)
@@ -829,7 +836,7 @@ class LightCurveAutoencoder(nn.Module):
 
         loader = ParsnipDataLoader(dataset, self)
 
-        for input_data, compare_data, redshifts, band_indices in loader:
+        for input_data, compare_data, redshifts, band_indices, amp_scales in loader:
             # Run the data through the model.
             input_data_device = input_data.to(self.device)
             compare_data_device = compare_data.to(self.device)
@@ -845,15 +852,17 @@ class LightCurveAutoencoder(nn.Module):
 
             # Pull out the keys that we care about saving.
             batch_predictions = {
-                'ref_time': encoding_mu[:, 0] * self.time_sigma,
-                'ref_time_err': encoding_err[:, 0] * self.time_sigma,
+                'reference_time': encoding_mu[:, 0] * self.time_sigma,
+                'reference_time_error': encoding_err[:, 0] * self.time_sigma,
                 'color': encoding_mu[:, 1],
-                'color_err': encoding_err[:, 1],
+                'color_error': encoding_err[:, 1],
+                'amplitude': amplitude_mu / amp_scales,
+                'amplitude_error': np.sqrt(np.exp(amplitude_logvar)) / amp_scales,
             }
 
             for idx in range(self.latent_size):
                 batch_predictions[f's{idx+1}'] = encoding_mu[:, 2 + idx]
-                batch_predictions[f's{idx+1}_err'] = encoding_err[:, 2 + idx]
+                batch_predictions[f's{idx+1}_error'] = encoding_err[:, 2 + idx]
 
             # Calculate other features
             time, flux, fluxerr, weight = [i.detach().numpy() for i in
@@ -873,19 +882,108 @@ class LightCurveAutoencoder(nn.Module):
             batch_predictions['count_s2n_3'] = np.sum(s2n > 3, axis=1)
             batch_predictions['count_s2n_5'] = np.sum(s2n > 5, axis=1)
 
+            # Number of observations with signal-to-noise above some threshold in
+            # different time windows.
+            reference_time = batch_predictions['reference_time'][:, None]
+            mask_pre = time < reference_time - 50.
+            mask_rise = (time >= reference_time - 50.) & (time < reference_time)
+            mask_fall = (time >= reference_time) & (time < reference_time + 50.)
+            mask_post = (time >= reference_time + 50.)
+            mask_s2n = s2n > 3
+            batch_predictions['count_s2n_3_pre'] = np.sum(mask_pre & mask_s2n, axis=1)
+            batch_predictions['count_s2n_3_rise'] = np.sum(mask_rise & mask_s2n, axis=1)
+            batch_predictions['count_s2n_3_fall'] = np.sum(mask_fall & mask_s2n, axis=1)
+            batch_predictions['count_s2n_3_post'] = np.sum(mask_post & mask_s2n, axis=1)
+
             predictions.append(pd.DataFrame(batch_predictions))
 
         predictions = pd.concat(predictions, ignore_index=True)
+
+        # Add in the preprocessed scale for the amplitude
+        scales = np.array([i.preprocess_data['scale'] for i in dataset.objects])
+        predictions['amplitude'] *= scales
+        predictions['amplitude_error'] *= scales
 
         # Merge in the metadata
         predictions.index = dataset.metadata.index
         predictions = pd.concat([dataset.metadata, predictions], axis=1)
 
+        # Estimate the absolute luminosity (assuming a zeropoint of 25).
+        amplitudes = predictions['amplitude'].copy()
+        amplitude_mask = amplitudes < 0.
+        amplitudes[amplitude_mask] = 1.
+        luminosity = (
+            -2.5*np.log10(amplitudes)
+            + 25.
+            - Planck18.distmod(predictions['redshift']).value
+        )
+        luminosity[amplitude_mask] = np.nan
+        predictions['luminosity'] = luminosity
+
+        # Luminosity uncertainty
+        frac_diff = predictions['amplitude_error'] / predictions['amplitude']
+        frac_diff[amplitude_mask] = 0.5
+        frac_diff[frac_diff > 0.5] = 0.5
+        int_mag_err = frac_to_mag(frac_diff)
+        int_mag_err[amplitude_mask] = -1.
+        predictions['luminosity_error'] = int_mag_err
+
+        return predictions
+
+    def predict_dataset_augmented(self, dataset, augments=10):
+        """Generate predictions for a dataset with augmentation
+
+        This will first generate predictions for the dataset without augmentation,
+        and will then generate predictions for the dataset with augmentation the
+        given number of times. This returns a dataframe in the same format as
+        `predict_dataset`, but with the following additional columns:
+        - original_object_id: the original object_id for each augmentation.
+        - augmented: True for augmented light curves, False for original ones.
+
+        Parameters
+        ----------
+        dataset : `avocado.Dataset`
+            Dataset to generate predictions for.
+        augments : int, optional
+            Number of times to augment the dataset, by default 10
+
+        Returns
+        -------
+        predictions : `pandas.DataFrame`
+            Dataframe with one row for each object and columns with each of the
+            predicted values.
+        """
+        # Keep track of whether augmentation was turned on so that we can revert to the
+        # previous state after we're done.
+        augment_state = self.augment
+
+        try:
+            # First pass without augmentation.
+            self.augment = False
+            pred = self.predict_dataset(dataset)
+            pred['original_object_id'] = pred.index
+            pred['augmented'] = False
+
+            predictions = [pred]
+
+            # Next passes with augmentation.
+            self.augment = True
+            for idx in tqdm(range(augments), file=sys.stdout):
+                pred = self.predict_dataset(dataset)
+                pred['original_object_id'] = pred.index
+                pred['augmented'] = True
+                pred.index = [i + f'_aug_{idx+1}' for i in pred.index]
+                predictions.append(pred)
+        finally:
+            # Make sure that we flip the augment switch back to what it started as.
+            self.augment = augment_state
+
+        predictions = pd.concat(predictions)
         return predictions
 
     def _predict_single(self, obj, pred_times, pred_bands, count):
         data = self.get_data(obj)
-        input_data, compare_data, redshifts, band_indices = data
+        input_data, compare_data, redshifts, band_indices, amp_scales = data
 
         # Add batch dimension
         input_data = input_data[None, :, :].to(self.device)
