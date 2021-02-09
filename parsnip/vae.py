@@ -173,13 +173,13 @@ class LightCurveAutoencoder(nn.Module):
         )
 
         # Send the model to the desired device
-        self.to(self.device)
+        self.to(self.device, force=True)
 
-    def to(self, device):
+    def to(self, device, force=False):
         """Send the model to the given device"""
         new_device = torch.device(device if torch.cuda.is_available() else 'cpu')
 
-        if self.device == new_device:
+        if self.device == new_device and not force:
             # Already on that device
             return
 
@@ -324,11 +324,15 @@ class LightCurveAutoencoder(nn.Module):
         print(f"autoencoder photometry: {autoencoder_photometry}")
         print(f"ratio:                  {autoencoder_photometry / sncosmo_photometry}")
 
-    def preprocess(self, dataset, threads=16, chunksize=64):
+    def preprocess(self, dataset, threads=16, chunksize=64, verbose=True):
         """Preprocess a dataset"""
         if threads == 1:
+            iterator = dataset.objects
+            if verbose:
+                iterator = tqdm(dataset.objects, file=sys.stdout)
+
             # Run on a single core without multiprocessing
-            for obj in tqdm(dataset.objects, file=sys.stdout):
+            for obj in iterator:
                 obj.preprocess(self)
         else:
             # Run with multiprocessing in multiple threads.
@@ -342,9 +346,11 @@ class LightCurveAutoencoder(nn.Module):
             func = functools.partial(ParsnipObject.preprocess, autoencoder=self)
 
             with multiprocessing.Pool(threads) as p:
-                data = list(tqdm(p.imap(func, dataset.objects, chunksize=chunksize),
-                                 total=len(dataset.objects),
-                                 file=sys.stdout))
+                iterator = p.imap(func, dataset.objects, chunksize=chunksize)
+                if verbose:
+                    iterator = tqdm(iterator, total=len(dataset.objects),
+                                    file=sys.stdout)
+                data = list(iterator)
 
             # The outputs don't get saved since the objects are in a different thread.
             # Save them manually.
@@ -910,7 +916,7 @@ class LightCurveAutoencoder(nn.Module):
 
         # Estimate the absolute luminosity (assuming a zeropoint of 25).
         amplitudes = predictions['amplitude'].copy()
-        amplitude_mask = amplitudes < 0.
+        amplitude_mask = amplitudes <= 0.
         amplitudes[amplitude_mask] = 1.
         luminosity = (
             -2.5*np.log10(amplitudes)
