@@ -15,6 +15,12 @@ class ParsnipObject(avocado.AstronomicalObject):
     See `avocado.AstronomicalObject` for details. We add specific functions needed
     for parsnip.
     """
+    def __init__(self, *args, correct_background=True, correct_mw_extinction=False,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.correct_background = correct_background
+        self.correct_mw_extinction = correct_mw_extinction
+
     def resample(self):
         """Resample the light curve by dropping observations and adding noise.
 
@@ -111,7 +117,7 @@ class ParsnipObject(avocado.AstronomicalObject):
         obs['time_indices'] = time_indices
 
         # Correct background levels if desired.
-        if autoencoder.correct_background:
+        if self.correct_background:
             for band in range(len(autoencoder.bands)):
                 band_mask = obs['band_indices'] == band
                 # Find observations outside of our window.
@@ -129,7 +135,7 @@ class ParsnipObject(avocado.AstronomicalObject):
         obs = obs[band_mask & time_mask]
 
         # Correct for Milky Way extinction if desired.
-        if autoencoder.correct_mw_extinction:
+        if self.correct_mw_extinction:
             band_extinctions = extinction.fm07(
                 autoencoder.band_wave_effs, self.metadata['mwebv']
             )

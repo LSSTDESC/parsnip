@@ -73,11 +73,9 @@ class ResidualBlock(nn.Module):
         self.conv2 = nn.Conv1d(out_channels, out_channels, 3,
                                dilation=dilation, padding=dilation)
 
-        self.relu = nn.ReLU(inplace=True)
-
     def forward(self, x):
         out = self.conv1(x)
-        out = self.relu(out)
+        out = F.relu(out)
         out = self.conv2(out)
 
         # Add back in the input. If it is smaller than the output, pad it first.
@@ -90,7 +88,7 @@ class ResidualBlock(nn.Module):
         # Residual connection
         out = out + pad_x
 
-        out = self.relu(out)
+        out = F.relu(out)
 
         return out
 
@@ -114,13 +112,47 @@ class Conv1dBlock(nn.Module):
         return out
 
 
+class GlobalMaxPoolingTime(nn.Module):
+    def forward(self, x):
+        out, inds = torch.max(x, 2)
+        return out
+
+
 class LightCurveAutoencoder(nn.Module):
-    def __init__(self, name, bands, device='cpu', batch_size=128, latent_size=3,
-                 min_wave=1000., max_wave=11000., spectrum_bins=300, max_redshift=4.,
-                 band_oversampling=51, time_window=300, time_pad=100, time_sigma=20.,
-                 magsys='ab', error_floor=0.01, learning_rate=1e-3,
-                 min_learning_rate=1e-5, penalty=1e-3, correct_mw_extinction=False,
-                 correct_background=False, augment=True, encode_block='residual'):
+    def __init__(
+        self,
+        name,
+        bands,
+        device='cpu',
+        min_wave=1000.,
+        max_wave=11000.,
+        spectrum_bins=300,
+        max_redshift=4.,
+        band_oversampling=51,
+        time_window=300,
+        time_pad=100,
+        time_sigma=20.,
+        magsys='ab',
+        error_floor=0.01,
+
+        batch_size=128,
+        learning_rate=1e-3,
+        scheduler_factor=0.5,
+        min_learning_rate=1e-5,
+        penalty=1e-3,
+        augment=True,
+
+        latent_size=3,
+        encode_block='residual',
+        encode_conv_architecture=[40, 80, 120, 160, 200, 200, 200],
+        encode_conv_dilations=[1, 2, 4, 8, 16, 32, 64],
+        encode_fc_architecture=[200],
+        encode_time_architecture=[200],
+        encode_latent_prepool_architecture=[200],
+        encode_latent_postpool_architecture=[200],
+        decode_architecture=[40, 80, 160],
+    ):
+
         super().__init__()
 
         # Figure out if CUDA is available and if we want to use it.
@@ -139,13 +171,20 @@ class LightCurveAutoencoder(nn.Module):
         self.time_sigma = time_sigma
         self.magsys = magsys
         self.error_floor = error_floor
+
+        self.encode_block = encode_block
+        self.encode_conv_architecture = encode_conv_architecture
+        self.encode_conv_dilations = encode_conv_dilations
+        self.encode_fc_architecture = encode_fc_architecture
+        self.encode_time_architecture = encode_time_architecture
+        self.encode_latent_prepool_architecture = encode_latent_prepool_architecture
+        self.encode_latent_postpool_architecture = encode_latent_postpool_architecture
+        self.decode_architecture = decode_architecture
+
         self.learning_rate = learning_rate
         self.min_learning_rate = min_learning_rate
         self.penalty = penalty
-        self.correct_mw_extinction = correct_mw_extinction
-        self.correct_background = correct_background
         self.augment = augment
-        self.encode_block = encode_block
 
         # Setup the bands
         self.bands = bands
@@ -169,7 +208,7 @@ class LightCurveAutoencoder(nn.Module):
         self.epoch = 0
         self.optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, factor=0.5, verbose=True
+            self.optimizer, factor=scheduler_factor, verbose=True
         )
 
         # Send the model to the desired device
@@ -324,7 +363,7 @@ class LightCurveAutoencoder(nn.Module):
         print(f"autoencoder photometry: {autoencoder_photometry}")
         print(f"ratio:                  {autoencoder_photometry / sncosmo_photometry}")
 
-    def preprocess(self, dataset, threads=16, chunksize=64, verbose=True):
+    def preprocess(self, dataset, threads=8, chunksize=64, verbose=True):
         """Preprocess a dataset"""
         if threads == 1:
             iterator = dataset.objects
@@ -524,47 +563,110 @@ class LightCurveAutoencoder(nn.Module):
         else:
             raise Exception(f"Unknown block {self.encode_block}.")
 
-        self.conv_encodes = nn.ModuleList([
-            encode_block(input_size, 20, 1),
-            encode_block(20, 20, 1),
-            encode_block(20, 40, 2),
-            encode_block(40, 60, 4),
-            encode_block(60, 80, 8),
-            encode_block(80, 100, 16),
-            encode_block(100, 120, 32),
-            encode_block(120, 140, 64),
-        ])
+        # Encoder architecture. We start with an input of size input_size x
+        # self.time_window. We apply a series of convolutional blocks to this that
+        # produce outputs that are the same size. The type of block is specified by
+        # self.encode_block. Each convolutional block has a dilation that is given by
+        # self.encode_conv_dilations.
+        if len(self.encode_conv_architecture) != len(self.encode_conv_dilations):
+            raise Exception("Layer sizes and dilations must have the same length!")
 
-        self.encode_1 = nn.Conv1d(140, 40, 1)
-        self.encode_2 = nn.Conv1d(40, 40, 1)
+        encode_layers = []
 
-        self.conv_time = nn.Conv1d(40, 1, 1)
-        self.softmax_time = nn.Softmax(dim=1)
+        # Convolutional layers.
+        last_size = input_size
+        for layer_size, dilation in zip(self.encode_conv_architecture,
+                                        self.encode_conv_dilations):
+            encode_layers.append(
+                encode_block(last_size, layer_size, dilation)
+            )
+            last_size = layer_size
 
-        self.fc_encoding_mu = nn.Linear(40, self.latent_size + 1)
-        self.fc_encoding_logvar = nn.Linear(40, self.latent_size + 2)
+        # Fully connected layers for the encoder following the convolution blocks.
+        # These are Conv1D layers with a kernel size of 1 that mix within the time
+        # indexes.
+        for layer_size in self.encode_fc_architecture:
+            encode_layers.append(nn.Conv1d(last_size, layer_size, 1))
+            encode_layers.append(nn.ReLU())
+            last_size = layer_size
 
-        self.decode_1 = nn.Conv1d(self.latent_size + 1, 40, 1)
-        self.decode_2 = nn.Conv1d(40, 80, 1)
-        self.decode_3 = nn.Conv1d(80, self.spectrum_bins, 1)
+        self.encode_layers = nn.Sequential(*encode_layers)
+
+        # Fully connected layers for the time-indexing layer. These are Conv1D layers
+        # with a kernel size of 1 that mix within time indexes.
+        time_last_size = last_size
+        encode_time_layers = []
+        for layer_size in self.encode_time_architecture:
+            encode_time_layers.append(nn.Conv1d(time_last_size, layer_size, 1))
+            encode_time_layers.append(nn.ReLU())
+            time_last_size = layer_size
+
+        # Final layer, go down to a single channel with no activation function.
+        encode_time_layers.append(nn.Conv1d(time_last_size, 1, 1))
+        self.encode_time_layers = nn.Sequential(*encode_time_layers)
+
+        # Fully connected layers to calculate the latent space parameters for the VAE.
+        encode_latent_layers = []
+        latent_last_size = last_size
+        for layer_size in self.encode_latent_prepool_architecture:
+            encode_latent_layers.append(nn.Conv1d(latent_last_size, layer_size, 1))
+            encode_latent_layers.append(nn.ReLU())
+            latent_last_size = layer_size
+
+        # Apply a global max pooling over the time channels.
+        encode_latent_layers.append(GlobalMaxPoolingTime())
+
+        # Apply fully connected layers to get the embedding.
+        for layer_size in self.encode_latent_postpool_architecture:
+            encode_latent_layers.append(nn.Linear(latent_last_size, layer_size))
+            encode_latent_layers.append(nn.ReLU())
+            latent_last_size = layer_size
+
+        self.encode_latent_layers = nn.Sequential(*encode_latent_layers)
+
+        # Finally, use a last FC layer to get mu and logvar
+        self.encode_mu_layer = nn.Linear(latent_last_size, self.latent_size + 1)
+        self.encode_logvar_layer = nn.Linear(latent_last_size, self.latent_size + 2)
+
+        # MLP decoder. We start with an input that is the intrinsic latent space + one
+        # dimension for time, and output a spectrum of size self.spectrum_bins. We also
+        # have hidden layers with sizes given by self.decode_layers. We implement this
+        # using a Conv1D layer with a kernel size of 1 for computational reasons so
+        # that it decodes multiple spectra for each transient all at the same time, but
+        # the decodes are all done independently so this is really an MLP.
+        decode_last_size = self.latent_size + 1
+        decode_layers = []
+        for layer_size in self.decode_architecture:
+            decode_layers.append(nn.Conv1d(decode_last_size, layer_size, 1))
+            decode_layers.append(nn.Tanh())
+            decode_last_size = layer_size
+
+        # Final layer. Use a FC layer to get us to the correct number of bins, and use
+        # a softplus activation function to get positive flux.
+        decode_layers.append(nn.Conv1d(decode_last_size, self.spectrum_bins, 1))
+        decode_layers.append(nn.Softplus())
+
+        self.decode_layers = nn.Sequential(*decode_layers)
 
     def encode(self, input_data):
-        e = input_data
-        for conv_encode in self.conv_encodes:
-            e = conv_encode(e)
+        # Apply common encoder blocks
+        e = self.encode_layers(input_data)
 
-        e1 = F.relu(self.encode_1(e))
-        e2 = self.encode_2(e1)
+        # Reference time branch. First, apply additional FC layers to get to an output
+        # that has a single channel.
+        e_time = self.encode_time_layers(e)
 
-        # Reference time: we calculate its mean with a special layer that is invariant
-        # to translations of the input.
-        t_vec = torch.nn.functional.softmax(torch.squeeze(self.conv_time(e2), 1), dim=1)
+        # Apply the time-indexing layer to calculate the reference time. This is a
+        # special layer that is invariant to translations of the input.
+        t_vec = torch.nn.functional.softmax(torch.squeeze(e_time, 1), dim=1)
         ref_time_mu = torch.sum(t_vec * self.input_times, 1) / self.time_sigma
 
-        # Rest of the encoding.
-        ee, max_inds = torch.max(e2, 2)
-        encoding_mu = self.fc_encoding_mu(ee)
-        encoding_logvar = self.fc_encoding_logvar(ee)
+        # Latent space branch.
+        e_latent = self.encode_latent_layers(e)
+
+        # Predict mu and logvar
+        encoding_mu = self.encode_mu_layer(e_latent)
+        encoding_logvar = self.encode_logvar_layer(e_latent)
 
         # Prepend the time mu value to get the full encoding.
         encoding_mu = torch.cat([ref_time_mu[:, None], encoding_mu], 1)
@@ -589,9 +691,7 @@ class LightCurveAutoencoder(nn.Module):
         stack_encoding = torch.cat([repeat_encoding, use_times[:, None, :]], 1)
 
         # Decode
-        d1 = torch.tanh(self.decode_1(stack_encoding))
-        d2 = torch.tanh(self.decode_2(d1))
-        model_spectra = F.softplus(self.decode_3(d2))
+        model_spectra = self.decode_layers(stack_encoding)
 
         # Apply colors
         apply_colors = 10**(-0.4 * color[:, None] * self.color_law[None, :])
@@ -678,12 +778,17 @@ class LightCurveAutoencoder(nn.Module):
         return amplitude_mu, amplitude_logvar
 
     def loss_function(self, compare_data, encoding_mu, encoding_logvar, amplitude_mu,
-                      amplitude_logvar, amplitude, model_flux, model_spectra):
+                      amplitude_logvar, amplitude, model_flux, model_spectra,
+                      return_components=False):
         flux = compare_data[:, 1]
         weight = compare_data[:, 3]
 
         # Reconstruction likelihood
         nll = torch.sum(0.5 * weight * (flux - model_flux)**2)
+
+        # KL divergence
+        kld = -0.5 * torch.sum(1 + encoding_logvar - encoding_mu.pow(2) -
+                               encoding_logvar.exp())
 
         # Regularization of spectra
         diff = (
@@ -692,17 +797,16 @@ class LightCurveAutoencoder(nn.Module):
         )
         penalty = self.penalty * torch.sum(diff**2)
 
-        # Amplitude probability
+        # Amplitude probability for the importance sampling integral
         amp_prob = -0.5 * torch.sum((amplitude - amplitude_mu)**2 /
                                     amplitude_logvar.exp())
 
-        # KL divergence
-        kld = -0.5 * torch.sum(1 + encoding_logvar - encoding_mu.pow(2) -
-                               encoding_logvar.exp())
+        if return_components:
+            return torch.stack([nll, kld, penalty, amp_prob])
+        else:
+            return nll + kld + penalty + amp_prob
 
-        return nll + penalty + kld + amp_prob
-
-    def score(self, dataset, rounds=1):
+    def score(self, dataset, rounds=1, return_components=False):
         """Evaluate the loss function on a given dataset.
 
         Parameters
@@ -752,9 +856,13 @@ class LightCurveAutoencoder(nn.Module):
                     loss = self.loss_function(compare_data, encoding_mu,
                                               encoding_logvar, amplitude_mu,
                                               amplitude_logvar, amplitude,
-                                              model_flux, model_spectra)
+                                              model_flux, model_spectra,
+                                              return_components)
 
-                    total_loss += loss.item()
+                    if return_components:
+                        total_loss += loss.detach().cpu().numpy()
+                    else:
+                        total_loss += loss.item()
                     total_count += len(input_data)
         finally:
             # Make sure that we flip the augment switch back to what it started as.
@@ -764,15 +872,22 @@ class LightCurveAutoencoder(nn.Module):
 
         return loss
 
-    def fit(self, dataset, max_epochs=1000, augments=1, test_dataset=None):
+    def fit(self, dataset, max_epochs=1000, test_dataset=None):
+        """Fit the model to a dataset"""
+
+        # The model is stochastic, so the loss function will have a fair bit of noise.
+        # If the dataset is small, we run through several augmentations of it every
+        # epoch to get the noise down.
+        repeats = int(np.ceil(25000 / len(dataset.objects)))
+
         while self.epoch < max_epochs:
             loader = ParsnipDataLoader(dataset, self, shuffle=True)
             self.train()
             train_loss = 0
             train_count = 0
 
-            with tqdm(range(loader.num_batches * augments), file=sys.stdout) as pbar:
-                for augment in range(augments):
+            with tqdm(range(loader.num_batches * repeats), file=sys.stdout) as pbar:
+                for repeat in range(repeats):
                     # Training step
                     for batch_data in loader:
                         input_data, compare_data, redshifts, band_indices, amp_scales \
@@ -882,7 +997,7 @@ class LightCurveAutoencoder(nn.Module):
             batch_predictions['total_s2n'] = np.sqrt(np.sum(s2n**2, axis=1))
 
             # Number of observations
-            batch_predictions['count'] = np.sum(fluxerr_mask, axis=1)
+            batch_predictions['count'] = np.sum(~fluxerr_mask, axis=1)
 
             # Number of observations with signal-to-noise above some threshold.
             batch_predictions['count_s2n_3'] = np.sum(s2n > 3, axis=1)
