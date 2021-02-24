@@ -720,13 +720,17 @@ class LightCurveAutoencoder(nn.Module):
 
         return model_spectra, model_flux
 
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5*logvar)
-        eps = torch.randn_like(std)
-        return mu + eps*std
+    def reparameterize(self, mu, logvar, sample=True):
+        if sample:
+            std = torch.exp(0.5*logvar)
+            eps = torch.randn_like(std)
+            return mu + eps*std
+        else:
+            return mu
 
-    def sample(self, encoding_mu, encoding_logvar):
-        sample_encoding = self.reparameterize(encoding_mu, encoding_logvar)
+    def sample(self, encoding_mu, encoding_logvar, sample=True):
+        sample_encoding = self.reparameterize(encoding_mu, encoding_logvar,
+                                              sample=sample)
 
         ref_times = sample_encoding[:, 0] * self.time_sigma
         color = sample_encoding[:, 1]
@@ -742,10 +746,12 @@ class LightCurveAutoencoder(nn.Module):
 
         return ref_times, color, encoding
 
-    def forward(self, input_data, compare_data, redshifts, band_indices):
+    def forward(self, input_data, compare_data, redshifts, band_indices,
+                sample=True):
         encoding_mu, encoding_logvar = self.encode(input_data)
 
-        ref_times, color, encoding = self.sample(encoding_mu, encoding_logvar)
+        ref_times, color, encoding = self.sample(encoding_mu, encoding_logvar,
+                                                 sample=sample)
 
         model_spectra, model_flux = self.decode(
             encoding, ref_times, color, compare_data[:, 0], redshifts, band_indices
@@ -757,7 +763,7 @@ class LightCurveAutoencoder(nn.Module):
         # Analytically evaluate the conditional distribution for the amplitude.
         amplitude_mu, amplitude_logvar = self.compute_amplitude(weight, model_flux,
                                                                 flux)
-        amplitude = self.reparameterize(amplitude_mu, amplitude_logvar)
+        amplitude = self.reparameterize(amplitude_mu, amplitude_logvar, sample=sample)
         model_flux = model_flux * amplitude[:, None]
         model_spectra = model_spectra * amplitude[:, None, None]
 
@@ -952,7 +958,7 @@ class LightCurveAutoencoder(nn.Module):
         """Load the model weights"""
         self.load_state_dict(torch.load(f'./models/{self.name}.pt', self.device))
 
-    def predict_dataset(self, dataset):
+    def predict_dataset(self, dataset, sample=False):
         predictions = []
 
         loader = ParsnipDataLoader(dataset, self)
@@ -965,7 +971,8 @@ class LightCurveAutoencoder(nn.Module):
             band_indices_device = band_indices.to(self.device)
 
             result = self.forward(input_data_device, compare_data_device,
-                                  redshifts_device, band_indices_device)
+                                  redshifts_device, band_indices_device,
+                                  sample=sample)
             result = [i.cpu().detach().numpy() for i in result]
             encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, ref_times, \
                 color, encoding, amplitude, model_flux, model_spectra = result
@@ -1051,7 +1058,7 @@ class LightCurveAutoencoder(nn.Module):
 
         return predictions
 
-    def predict_dataset_augmented(self, dataset, augments=10):
+    def predict_dataset_augmented(self, dataset, augments=10, sample=False):
         """Generate predictions for a dataset with augmentation
 
         This will first generate predictions for the dataset without augmentation,
@@ -1081,7 +1088,7 @@ class LightCurveAutoencoder(nn.Module):
         try:
             # First pass without augmentation.
             self.augment = False
-            pred = self.predict_dataset(dataset)
+            pred = self.predict_dataset(dataset, sample=sample)
             pred['original_object_id'] = pred.index
             pred['augmented'] = False
 
@@ -1090,7 +1097,7 @@ class LightCurveAutoencoder(nn.Module):
             # Next passes with augmentation.
             self.augment = True
             for idx in tqdm(range(augments), file=sys.stdout):
-                pred = self.predict_dataset(dataset)
+                pred = self.predict_dataset(dataset, sample=sample)
                 pred['original_object_id'] = pred.index
                 pred['augmented'] = True
                 pred.index = [i + f'_aug_{idx+1}' for i in pred.index]

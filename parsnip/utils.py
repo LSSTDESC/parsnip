@@ -1,6 +1,7 @@
 import avocado
 import sncosmo
 import numpy as np
+import argparse
 import os
 
 
@@ -98,10 +99,11 @@ def load_dataset(name, *args, **kwargs):
 
     dataset, bands, correct_background, correct_mw_extinction = result
 
-    # Flag each object
-    for obj in dataset.objects:
-        obj.correct_background = correct_background
-        obj.correct_mw_extinction = correct_mw_extinction
+    if dataset.objects is not None:
+        # Flag each object
+        for obj in dataset.objects:
+            obj.correct_background = correct_background
+            obj.correct_mw_extinction = correct_mw_extinction
 
     return dataset, bands
 

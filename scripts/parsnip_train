@@ -5,6 +5,7 @@ import sys
 import parsnip
 import torch
 import argparse
+import time
 
 
 def parse_int_list(text):
@@ -13,22 +14,24 @@ def parse_int_list(text):
 
 
 if __name__ == '__main__':
+    start_time = time.time()
+
     parser = argparse.ArgumentParser(description='Train a Parsnip model',
                                      argument_default=argparse.SUPPRESS)
-    parser.add_argument('name')
+    parser.add_argument('dataset')
+    parser.add_argument('model')
 
     parser.add_argument('--overwrite', action='store_true', default=False)
-    parser.add_argument('--device', default='cpu')
-    parser.add_argument('--threads', default=8, type=int)
+    parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--split_train_test', action='store_true', default=False)
 
-    parser.add_argument('--dataset', default='ps1')
+    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--threads', default=8, type=int)
 
     parser.add_argument('--batch_size', type=int)
     parser.add_argument('--penalty', type=float)
     parser.add_argument('--learning_rate', type=float)
     parser.add_argument('--scheduler_factor', type=float)
-    parser.add_argument('--max_epochs', type=int, default=1000)
 
     parser.add_argument('--latent_size', type=int)
     parser.add_argument('--encode_block', choices=['residual', 'conv1d'])
@@ -43,16 +46,16 @@ if __name__ == '__main__':
     args = vars(parser.parse_args())
 
     # Name of the dataset
-    name = args.pop('name')
+    model_name = args.pop('model')
 
     # Figure out if we have already trained a model with this name.
-    path = f'./models/{name}.pt'
+    path = f'./models/{model_name}.pt'
     overwrite = args.pop('overwrite')
     if os.path.exists(path):
         if overwrite:
-            print(f"Model {name} already exists, overwriting!")
+            print(f"Model {model_name} already exists, overwriting!")
         else:
-            print(f"Model {name} already exists, skipping!")
+            print(f"Model {model_name} already exists, skipping!")
             sys.exit()
 
     # Figure out which dataset to use
@@ -74,31 +77,37 @@ if __name__ == '__main__':
     # Maximum number of epochs to train for
     max_epochs = args.pop('max_epochs')
 
-    autoencoder = parsnip.LightCurveAutoencoder(
-        name,
+    model = parsnip.LightCurveAutoencoder(
+        model_name,
         bands,
         device=device,
         **args
     )
 
-    autoencoder.preprocess(dataset)
+    model.preprocess(dataset)
 
     if use_train_test:
         train_dataset, test_dataset = parsnip.split_train_test(dataset)
-        autoencoder.fit(train_dataset, test_dataset=test_dataset, max_epochs=max_epochs)
+        model.fit(train_dataset, test_dataset=test_dataset, max_epochs=max_epochs)
     else:
         train_dataset = dataset
-        autoencoder.fit(train_dataset, max_epochs=max_epochs)
+        model.fit(train_dataset, max_epochs=max_epochs)
 
     # Save the score to a file for quick comparisons. If we have a small dataset,
     # repeat the dataset several times when calculating the score.
     rounds = int(np.ceil(25000 / len(train_dataset.objects)))
 
-    train_score = autoencoder.score(train_dataset, rounds=rounds)
+    train_score = model.score(train_dataset, rounds=rounds)
     if use_train_test:
-        test_score = autoencoder.score(test_dataset, rounds=10 * rounds)
+        test_score = model.score(test_dataset, rounds=10 * rounds)
     else:
         test_score = -1.
 
+    end_time = time.time()
+
+    # Time taken in minutes
+    elapsed_time = (end_time - start_time) / 60.
+
     with open('./parsnip_results.txt', 'a') as f:
-        print(f'{name} {autoencoder.epoch} {train_score:.4f} {test_score:.4f}', file=f)
+        print(f'{model_name} {model.epoch} {elapsed_time:.2f} {train_score:.4f} '
+              f'{test_score:.4f}', file=f)
