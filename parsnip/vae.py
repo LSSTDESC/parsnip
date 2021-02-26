@@ -944,6 +944,10 @@ class LightCurveAutoencoder(nn.Module):
                     )
 
             self.scheduler.step(train_loss)
+
+            # Save the model
+            # TODO: Save the model architecture with the model too so that we can
+            # recreate it.
             os.makedirs('./models/', exist_ok=True)
             torch.save(self.state_dict(), f'./models/{self.name}.pt')
 
@@ -955,7 +959,10 @@ class LightCurveAutoencoder(nn.Module):
             self.epoch += 1
 
     def load(self):
-        """Load the model weights"""
+        """Load the model weights
+
+        TODO: Load the model architecture along with the weights.
+        """
         self.load_state_dict(torch.load(f'./models/{self.name}.pt', self.device))
 
     def predict_dataset(self, dataset, sample=False):
