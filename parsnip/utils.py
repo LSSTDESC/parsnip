@@ -1,7 +1,6 @@
 import avocado
 import sncosmo
 import numpy as np
-import argparse
 import os
 
 
@@ -13,6 +12,23 @@ def parse_panstarrs(dataset):
     bands = ['ps1::g', 'ps1::r', 'ps1::i', 'ps1::z']
     correct_background = True
     correct_mw_extinction = True
+
+    # Labels to use for classification
+    label_map = {
+        '-': '-',           # Unknown object
+        'FELT': 'FELT',
+        'SLSN': 'SLSN',
+        'SNII': 'SNII',
+        'SNIIb?': 'SNII',
+        'SNIIn': 'SNIIn',
+        'SNIa': 'SNIa',
+        'SNIax': 'SNIax',
+        'SNIbc (Ib)': 'SNIbc',
+        'SNIbc (Ic)': 'SNIbc',
+        'SNIbc (Ic-BL)': 'SNIbc',
+        'SNIbn': 'SNIbc',
+    }
+    dataset.metadata['label'] = [label_map[i] for i in dataset.metadata['type']]
 
     return dataset, bands, correct_background, correct_mw_extinction
 
@@ -42,6 +58,22 @@ def parse_plasticc(dataset):
     ]
 
     dataset = dataset[dataset.metadata['class'].isin(valid_classes)]
+
+    # Labels to use for classification
+    label_map = {
+        90: 'SNIa',
+        67: 'SNIa-91bg',
+        52: 'SNIax',
+        42: 'SNII',
+        62: 'SNIbc',
+        95: 'SLSN',
+        15: 'TDE',
+        64: 'KN',
+        992: 'ILOT',
+        993: 'CaRT',
+        994: 'PISN',
+    }
+    dataset.metadata['label'] = [label_map[i] for i in dataset.metadata['class']]
 
     bands = ['lsstu', 'lsstg', 'lsstr', 'lssti', 'lsstz', 'lssty']
     correct_background = True
