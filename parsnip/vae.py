@@ -123,7 +123,7 @@ class LightCurveAutoencoder(nn.Module):
         self,
         name,
         bands,
-        device='cpu',
+        device='cuda',
         min_wave=1000.,
         max_wave=11000.,
         spectrum_bins=300,
