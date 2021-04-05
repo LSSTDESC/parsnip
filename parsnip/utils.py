@@ -138,6 +138,10 @@ def load_dataset(name, *args, **kwargs):
             obj.correct_background = correct_background
             obj.correct_mw_extinction = correct_mw_extinction
 
+        # Update the label on each object.
+        for obj, label in zip(dataset.objects, dataset.metadata['label']):
+            obj.metadata['label'] = label
+
     return dataset, bands
 
 

@@ -24,7 +24,8 @@ class Classifier():
             'reference_time_error',
         ]
 
-    def train(self, predictions, num_folds=10, labels=None, target_label=None):
+    def train(self, predictions, num_folds=10, labels=None, target_label=None,
+              reweight=True):
         """Train a classifier on the predictions from a VAE model."""
         print("Training classifier with keys:")
         for key in self.keys:
@@ -78,9 +79,12 @@ class Classifier():
 
         # Normalize by the class counts. We normalize so that the average weight is 1
         # across all objects, and so that the sum of weights for each class is the same.
-        class_counts = numeric_labels.value_counts()
-        class_weights = np.mean(class_counts) / class_counts
-        weights = np.array([class_weights[i] for i in numeric_labels])
+        if reweight:
+            class_counts = numeric_labels.value_counts()
+            class_weights = np.mean(class_counts) / class_counts
+            weights = np.array([class_weights[i] for i in numeric_labels])
+        else:
+            weights = np.ones_like(numeric_labels)
 
         # Calculate out-of-sample classifications with K-fold cross-validation if we
         # are doing that.

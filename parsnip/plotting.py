@@ -1,15 +1,19 @@
 from matplotlib import pyplot as plt
+from matplotlib.gridspec import GridSpec
 from sklearn.metrics import confusion_matrix
 import itertools
 import numpy as np
+import avocado
 
 
 def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
                      percentile=68, ax=None, **kwargs):
     if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
+        fig, ax = plt.subplots(figsize=(5, 4), constrained_layout=True)
 
-    model_times, model_flux, data = model.predict_light_curve(obj, count, **kwargs)
+    model_times, model_flux, data, model_result = model.predict_light_curve(
+        obj, count, **kwargs
+    )
 
     input_data, compare_data, redshifts, band_indices, amp_scales = data
 
@@ -20,15 +24,21 @@ def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
 
     max_model = 0.
 
+    # Use the offset from the model to get t=0
+    ref_time = model_result[0][0, 0] * model.time_sigma
+    time = time - ref_time
+    model_times = model_times - ref_time
+
     for band_idx, band_name in enumerate(model.band_map):
-        c = f'C{band_idx}'
+        c = avocado.get_band_plot_color(band_name)
+        marker = avocado.get_band_plot_marker(band_name)
 
         match = band_indices == band_idx
         ax.errorbar(time[match], flux[match], fluxerr[match], fmt='o', c=c,
-                    label=band_name, elinewidth=1)
+                    label=band_name, elinewidth=1, marker=marker)
 
         if band_idx == 0:
-            label = 'Model'
+            label = 'ParSNIP Model'
         else:
             label = None
 
@@ -63,6 +73,9 @@ def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
     ax.set_xlabel('Time (days)')
     ax.set_ylabel('Flux')
 
+    # Return the reference time that was used in the plot
+    return ref_time
+
 
 def plot_spectrum(model, obj, time, count=100, show_bands=True, percentile=68,
                   ax=None, c=None, label=None):
@@ -91,7 +104,7 @@ def plot_spectrum(model, obj, time, count=100, show_bands=True, percentile=68,
     ax.set_ylabel('Flux')
 
 
-def plot_confusion_matrix(predictions, classifications):
+def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=None):
     """Plot a confusion matrix
 
     Adapted from example that used to be at
@@ -108,7 +121,7 @@ def plot_confusion_matrix(predictions, classifications):
 
     class_names = classifications.columns
 
-    plt.figure(figsize=(5, 4), dpi=100)
+    plt.figure(figsize=figsize, constrained_layout=True)
     cm = confusion_matrix(labels, classifications.idxmax(axis=1),
                           labels=class_names, normalize='true')
 
@@ -124,9 +137,10 @@ def plot_confusion_matrix(predictions, classifications):
                  horizontalalignment="center",
                  color="white" if cm[i, j] > thresh else "black")
 
-    plt.ylabel('True class')
-    plt.xlabel('Predicted class')
-    plt.tight_layout()
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    if title is not None:
+        plt.title(title)
 
     # Make a colorbar that is lined up with the plot
     from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -134,3 +148,95 @@ def plot_confusion_matrix(predictions, classifications):
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="4%", pad=0.25)
     plt.colorbar(im, cax=cax, label='Fraction of objects')
+
+
+def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx3=None,
+                        max_count=1000, legend_ncol=1):
+    """Plot a representation"""
+    color_map = {
+        'SNIa': 'C0',
+        'SNIax': 'C9',
+        'SNIa-91bg': 'lightgreen',
+
+        'SLSN': 'C2',
+        'SNII': 'C1',
+        'SNIIn': 'C3',
+        'SNIbc': 'C4',
+
+        'KN': 'C5',
+
+        'CaRT': 'C3',
+        'ILOT': 'C6',
+        'PISN': 'C8',
+        'TDE': 'C7',
+
+        'FELT': 'C5',
+    }
+
+    if idx3 is not None:
+        fig = plt.figure(figsize=(8, 8), constrained_layout=True)
+
+        gs = GridSpec(2, 2, figure=fig)
+
+        ax12 = fig.add_subplot(gs[1, 0])
+        ax13 = fig.add_subplot(gs[0, 0], sharex=ax12)
+        ax32 = fig.add_subplot(gs[1, 1], sharey=ax12)
+        legend_ax = fig.add_subplot(gs[0, 1])
+        legend_ax.axis('off')
+
+        plot_vals = [
+            (idx1, idx2, ax12),
+            (idx1, idx3, ax13),
+            (idx3, idx2, ax32),
+        ]
+    else:
+        fig, ax = plt.subplots(figsize=(6, 6), constrained_layout=True)
+
+        plot_vals = [
+            (idx1, idx2, ax)
+        ]
+
+    for xidx, yidx, ax in plot_vals:
+        if mask is not None:
+            cut_predictions = predictions[~mask]
+            ax.scatter(cut_predictions[f's{xidx}'], cut_predictions[f's{yidx}'],
+                       c='k', s=3, alpha=0.1, label='Unknown')
+            valid_predictions = predictions[mask]
+        else:
+            valid_predictions = predictions
+
+        for type_name in plot_labels:
+            type_predictions = valid_predictions[valid_predictions['label'] ==
+                                                 type_name]
+
+            color = color_map[type_name]
+
+            markers, caps, bars = ax.errorbar(
+                type_predictions[f's{xidx}'][:max_count],
+                type_predictions[f's{yidx}'][:max_count],
+                xerr=type_predictions[f's{xidx}_error'][:max_count],
+                yerr=type_predictions[f's{yidx}_error'][:max_count],
+                label=type_name,
+                fmt='o',
+                markersize=5,
+                c=color,
+            )
+
+            [bar.set_alpha(0.3) for bar in bars]
+
+    if idx3 is not None:
+        ax12.set_xlabel(f'$s_{idx1}$')
+        ax12.set_ylabel(f'$s_{idx2}$')
+        ax13.set_ylabel(f'$s_{idx3}$')
+        ax13.tick_params(labelbottom=False)
+        ax32.set_xlabel(f'$s_{idx3}$')
+        ax32.tick_params(labelleft=False)
+
+        handles, labels = ax12.get_legend_handles_labels()
+        legend_ax.legend(handles=handles, labels=labels, loc='center',
+                         ncol=legend_ncol)
+    else:
+        ax.set_xlabel(f'$s_{idx1}$')
+        ax.set_ylabel(f'$s_{idx2}$')
+
+        ax.legend(ncol=legend_ncol)

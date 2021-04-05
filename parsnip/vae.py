@@ -1140,9 +1140,10 @@ class LightCurveAutoencoder(nn.Module):
             pred_bands = pred_bands.repeat(count, 1)
 
         # Sample VAE parameters
+        result = self.forward(input_data, compare_data, redshifts, band_indices)
+
         encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, ref_times, \
-            color, encoding, amplitude, model_flux, model_spectra = self.forward(
-                input_data, compare_data, redshifts, band_indices)
+            color, encoding, amplitude, model_flux, model_spectra = result
 
         # Do the predictions
         model_spectra, model_flux = self.decode(
@@ -1163,7 +1164,9 @@ class LightCurveAutoencoder(nn.Module):
             model_flux = model_flux[0]
             model_spectra = model_spectra[0]
 
-        return model_flux, model_spectra, data
+        cpu_result = [i.cpu().detach().numpy() for i in result]
+
+        return model_flux, model_spectra, data, cpu_result
 
     def predict_light_curve(self, obj, count=0, sampling=1., pad=0.):
         # Figure out where to sample the light curve
@@ -1176,8 +1179,8 @@ class LightCurveAutoencoder(nn.Module):
         pred_times = np.tile(model_times, len(bands))
         pred_bands = np.repeat(bands, len(model_times))
 
-        model_flux, model_spectra, data = self._predict_single(obj, pred_times,
-                                                               pred_bands, count)
+        model_flux, model_spectra, data, model_result = self._predict_single(
+            obj, pred_times, pred_bands, count)
 
         # Reshape model_flux so that it has the shape (batch, band, time)
         model_flux = model_flux.reshape((-1, len(bands), len(model_times)))
@@ -1186,14 +1189,15 @@ class LightCurveAutoencoder(nn.Module):
             # Get rid of the batch index
             model_flux = model_flux[0]
 
-        return model_times, model_flux, data
+        return model_times, model_flux, data, model_result
 
     def predict_spectrum(self, obj, time, count=0):
         """Predict the spectrum of an object at a given time"""
         pred_times = [time]
         pred_bands = [0]
 
-        model_flux, model_spectra, data = self._predict_single(obj, pred_times,
-                                                               pred_bands, count)
+        model_flux, model_spectra, data, model_result = self._predict_single(
+            obj, pred_times, pred_bands, count
+        )
 
         return model_spectra[..., 0]
