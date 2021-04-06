@@ -132,6 +132,7 @@ class LightCurveAutoencoder(nn.Module):
         time_window=300,
         time_pad=100,
         time_sigma=20.,
+        color_sigma=0.3,
         magsys='ab',
         error_floor=0.01,
 
@@ -169,6 +170,7 @@ class LightCurveAutoencoder(nn.Module):
         self.time_window = time_window
         self.time_pad = time_pad
         self.time_sigma = time_sigma
+        self.color_sigma = color_sigma
         self.magsys = magsys
         self.error_floor = error_floor
 
@@ -192,8 +194,9 @@ class LightCurveAutoencoder(nn.Module):
         self._setup_band_weights()
         self._calculate_band_wave_effs()
 
-        # Setup the color law
-        color_law = extinction.fm07(self.model_wave, 1.)
+        # Setup the color law. We scale this so that the color law has a B-V color of 1,
+        # meaning that a coefficient multiplying the color law is the B-V color.
+        color_law = extinction.fm07(self.model_wave, 3.1)
         self.color_law = torch.FloatTensor(color_law).to(self.device)
 
         # Setup the timing
@@ -732,15 +735,16 @@ class LightCurveAutoencoder(nn.Module):
         sample_encoding = self.reparameterize(encoding_mu, encoding_logvar,
                                               sample=sample)
 
+        # Rescale variables
         ref_times = sample_encoding[:, 0] * self.time_sigma
-        color = sample_encoding[:, 1]
+        color = sample_encoding[:, 1] * self.color_sigma
         encoding = sample_encoding[:, 2:]
 
         # Constrain the color and reference time so that things don't go to crazy values
         # and throw everything off with floating point precision errors. This will not
         # be a concern for a properly trained model, but things can go wrong early in
         # the training at high learning rates.
-        color = torch.clamp(color, -10., 10.)
+        color = torch.clamp(color, -10. * self.color_sigma, 10. * self.color_sigma)
         ref_times = torch.clamp(ref_times, -10. * self.time_sigma,
                                 10. * self.time_sigma)
 
@@ -989,8 +993,8 @@ class LightCurveAutoencoder(nn.Module):
             batch_predictions = {
                 'reference_time': encoding_mu[:, 0] * self.time_sigma,
                 'reference_time_error': encoding_err[:, 0] * self.time_sigma,
-                'color': encoding_mu[:, 1],
-                'color_error': encoding_err[:, 1],
+                'color': encoding_mu[:, 1] * self.color_sigma,
+                'color_error': encoding_err[:, 1] * self.color_sigma,
                 'amplitude': amplitude_mu / amp_scales,
                 'amplitude_error': np.sqrt(np.exp(amplitude_logvar)) / amp_scales,
             }
