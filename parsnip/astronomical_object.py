@@ -137,7 +137,7 @@ class ParsnipObject(avocado.AstronomicalObject):
         # Correct for Milky Way extinction if desired.
         if self.correct_mw_extinction:
             band_extinctions = extinction.fm07(
-                autoencoder.band_wave_effs, self.metadata['mwebv']
+                autoencoder.band_wave_effs, 3.1 * self.metadata['mwebv']
             )
             extinction_scales = 10**(0.4 * band_extinctions[obs['band_indices']])
             obs['flux'] *= extinction_scales
