@@ -25,7 +25,7 @@ class Classifier():
         ]
 
     def train(self, predictions, num_folds=10, labels=None, target_label=None,
-              reweight=True):
+              reweight=True, min_child_weight=1000.):
         """Train a classifier on the predictions from a VAE model."""
         print("Training classifier with keys:")
         for key in self.keys:
@@ -97,14 +97,14 @@ class Classifier():
                 lightgbm_params = {
                     "objective": "binary",
                     "metric": "binary_logloss",
-                    "min_child_weight": 1000.,
+                    "min_child_weight": min_child_weight,
                 }
             else:
                 lightgbm_params = {
                     "objective": "multiclass",
                     "num_class": len(class_names),
                     "metric": "multi_logloss",
-                    "min_child_weight": 1000.,
+                    "min_child_weight": min_child_weight,
                 }
 
             train_index = predictions['fold'] != fold
