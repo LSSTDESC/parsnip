@@ -144,6 +144,7 @@ class LightCurveAutoencoder(nn.Module):
         augment=True,
 
         latent_size=3,
+        input_redshift=True,
         encode_block='residual',
         encode_conv_architecture=[40, 80, 120, 160, 200, 200, 200],
         encode_conv_dilations=[1, 2, 4, 8, 16, 32, 64],
@@ -174,6 +175,7 @@ class LightCurveAutoencoder(nn.Module):
         self.magsys = magsys
         self.error_floor = error_floor
 
+        self.input_redshift = input_redshift
         self.encode_block = encode_block
         self.encode_conv_architecture = encode_conv_architecture
         self.encode_conv_dilations = encode_conv_dilations
@@ -533,11 +535,17 @@ class LightCurveAutoencoder(nn.Module):
         grid_weights *= self.error_floor**2
 
         # Stack the input data
-        input_data = np.concatenate([
-            redshifts[:, None, None].repeat(self.time_window, axis=2),
-            grid_flux,
-            grid_weights,
-        ], axis=1)
+        if self.input_redshift:
+            input_data = np.concatenate([
+                redshifts[:, None, None].repeat(self.time_window, axis=2),
+                grid_flux,
+                grid_weights,
+            ], axis=1)
+        else:
+            input_data = np.concatenate([
+                grid_flux,
+                grid_weights,
+            ], axis=1)
 
         # Convert to torch tensors
         input_data = torch.FloatTensor(input_data)
@@ -557,7 +565,10 @@ class LightCurveAutoencoder(nn.Module):
 
     def build_model(self):
         """Build the model"""
-        input_size = len(self.bands) * 2 + 1
+        if self.input_redshift:
+            input_size = len(self.bands) * 2 + 1
+        else:
+            input_size = len(self.bands) * 2
 
         if self.encode_block == 'conv1d':
             encode_block = Conv1dBlock
