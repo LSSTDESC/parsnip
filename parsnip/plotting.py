@@ -7,7 +7,7 @@ import avocado
 
 
 def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
-                     percentile=68, ax=None, **kwargs):
+                     show_missing_bandpasses=False, percentile=68, ax=None, **kwargs):
     if ax is None:
         fig, ax = plt.subplots(figsize=(5, 4), constrained_layout=True)
 
@@ -34,6 +34,11 @@ def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
         marker = avocado.get_band_plot_marker(band_name)
 
         match = band_indices == band_idx
+
+        if not np.any(match) and not show_missing_bandpasses:
+            # No observations in this band, skip it.
+            continue
+
         ax.errorbar(time[match], flux[match], fluxerr[match], fmt='o', c=c,
                     label=band_name, elinewidth=1, marker=marker)
 

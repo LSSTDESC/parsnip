@@ -4,7 +4,8 @@ import scipy.stats
 
 from astropy.stats import biweight_location
 import avocado
-import extinction
+
+from .utils import should_correct_background
 
 SIDEREAL_SCALE = 86400. / 86164.0905
 
@@ -15,12 +16,6 @@ class ParsnipObject(avocado.AstronomicalObject):
     See `avocado.AstronomicalObject` for details. We add specific functions needed
     for parsnip.
     """
-    def __init__(self, *args, correct_background=True, correct_mw_extinction=False,
-                 **kwargs):
-        super().__init__(*args, **kwargs)
-        self.correct_background = correct_background
-        self.correct_mw_extinction = correct_mw_extinction
-
     def resample(self):
         """Resample the light curve by dropping observations and adding noise.
 
@@ -116,10 +111,10 @@ class ParsnipObject(avocado.AstronomicalObject):
         obs['grid_times'] = grid_times
         obs['time_indices'] = time_indices
 
-        # Correct background levels if desired.
-        if self.correct_background:
-            for band in range(len(autoencoder.bands)):
-                band_mask = obs['band_indices'] == band
+        # Correct background levels for bands that need it.
+        for band_idx, band_name in enumerate(autoencoder.bands):
+            if should_correct_background(band_name):
+                band_mask = obs['band_indices'] == band_idx
                 # Find observations outside of our window.
                 outside_obs = obs[~time_mask & band_mask]
                 if len(outside_obs) == 0:
@@ -135,13 +130,10 @@ class ParsnipObject(avocado.AstronomicalObject):
         obs = obs[band_mask & time_mask]
 
         # Correct for Milky Way extinction if desired.
-        if self.correct_mw_extinction:
-            band_extinctions = extinction.fm07(
-                autoencoder.band_wave_effs, 3.1 * self.metadata['mwebv']
-            )
-            extinction_scales = 10**(0.4 * band_extinctions[obs['band_indices']])
-            obs['flux'] *= extinction_scales
-            obs['flux_error'] *= extinction_scales
+        band_extinctions = autoencoder.band_mw_extinctions * self.metadata['mwebv']
+        extinction_scales = 10**(0.4 * band_extinctions[obs['band_indices']])
+        obs['flux'] *= extinction_scales
+        obs['flux_error'] *= extinction_scales
 
         # Scale the light curve so that its peak has an amplitude of roughly 1. We use
         # the brightest observation with signal-to-noise above 5 if there is one, or
@@ -190,11 +182,29 @@ class ParsnipObject(avocado.AstronomicalObject):
         # Shift everything by the final offset estimate.
         shift_time = sidereal_time - sidereal_offset
 
-        # Determine the reference time. We use the median time of the five highest
-        # signal-to-noise observations to avoid outliers.
-        s2n_mask = np.argsort(self.observations['flux'] /
-                              self.observations['flux_error'])[-5:]
-        max_time = np.round(np.median(shift_time.iloc[s2n_mask]))
+        # Determine the reference time for the light curve.
+        # This is tricky to do right. We want to roughly estimate where the "peak" of
+        # the light curve is. Oftentimes we see low signal-to-noise observations that
+        # are much larger than the peak flux though. This algorithm tries to find a
+        # nice balance to handle that.
+
+        # Find the five highest signal-to-noise observations
+        s2n = self.observations['flux'] / self.observations['flux_error']
+        s2n_mask = np.argsort(s2n)[-5:]
+
+        # If we have very few observations, only keep the ones above signal-to-noise of
+        # 5 if possible. Sometimes we only have a single point on the rise so far, so
+        # we don't want to include a bunch of bad observations in our determination of
+        # the time.
+        s2n_mask_2 = s2n.iloc[s2n_mask] > 5.
+        if np.any(s2n_mask_2):
+            cut_times = shift_time.iloc[s2n_mask][s2n_mask_2]
+        else:
+            # No observations with signal-to-noise above 5. Just use whatever we
+            # have...
+            cut_times = shift_time.iloc[s2n_mask]
+
+        max_time = np.round(np.median(cut_times))
 
         # Convert back to a reference time in the original units. This reference time
         # corresponds to the reference of the grid in sidereal time.

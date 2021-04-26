@@ -1,8 +1,61 @@
 import avocado
 import sncosmo
 import numpy as np
-import argparse
 import os
+
+
+band_info = {
+    # Information about all of the different bands and how to handle them. We assume
+    # that all data from the same telescope should be processed the same way.
+
+    # Band name     Correct     Correct
+    #               Background  MWEBV
+
+    # PanSTARRS
+    'ps1::g':       (True,      True),
+    'ps1::r':       (True,      True),
+    'ps1::i':       (True,      True),
+    'ps1::z':       (True,      True),
+
+    # PLAsTICC
+    'lsstu':        (True,      False),
+    'lsstg':        (True,      False),
+    'lsstr':        (True,      False),
+    'lssti':        (True,      False),
+    'lsstz':        (True,      False),
+    'lssty':        (True,      False),
+
+    # ZTF
+    'ztfr':         (False,     True),
+    'ztfg':         (False,     True),
+    'ztfi':         (False,     True),
+
+    # SWIFT
+    'uvot::u':      (False,     True),
+    'uvot::b':      (False,     True),
+    'uvot::v':      (False,     True),
+    'uvot::uvm2':   (False,     True),
+    'uvot::uvw1':   (False,     True),
+    'uvot::uvw2':   (False,     True),
+}
+
+
+def should_correct_background(bandpass):
+    """Check if the background level should be corrected for a given bandpass"""
+    try:
+        return band_info[bandpass][0]
+    except KeyError:
+        raise Exception(f"Can't handle bandpass {bandpass}. Add it to band_info in "
+                        "utils.py")
+
+
+def should_correct_mw_extinction(bandpass):
+    """Check if Milky Way extinction should be corrected for a given bandpass"""
+    try:
+        return band_info[bandpass][1]
+    except KeyError:
+        raise Exception(f"Can't handle bandpass {bandpass}. Add it to band_info in "
+                        "utils.py")
 
 
 def parse_panstarrs(dataset):
@@ -30,6 +83,23 @@ def parse_panstarrs(dataset):
         'SNIbn': 'SNIbc',
     }
     dataset.metadata['label'] = [label_map[i] for i in dataset.metadata['type']]
+
+    return dataset, bands, correct_background, correct_mw_extinction
+
+
+def parse_ztf(dataset):
+    """Parse a ZTF dataset"""
+    # Throw out light curves that don't have good redshifts.
+    dataset = dataset[~dataset.metadata['redshift'].isnull()]
+
+    bands = ['ztfr', 'ztfg', 'ztfi', 'uvot::u', 'uvot::b', 'uvot::v',
+             'uvot::uvm2', 'uvot::uvw1', 'uvot::uvw2']
+    correct_background = False
+    correct_mw_extinction = False
+
+    # Labels to use for classification
+    # TODO clean this up
+    dataset.metadata['label'] = dataset.metadata['type']
 
     return dataset, bands, correct_background, correct_mw_extinction
 
@@ -97,6 +167,16 @@ def load_dataset(name, *args, **kwargs):
     We also allow for the special dataset "plasticc_combo" that selects a subset of
     the PLAsTiCC data from the training and validation sets.
     """
+    # TODO: Get rid of all of this and go back to the original Avocado method of
+    # loading datasets.
+    # - Need to handle loading multiple datasets in pieces. That could be done by
+    # parsing a string, e.g. plasticc_train,plasticc_test[0,100],plasticc_test[5,10]
+    # - Need to be able to detect invalid redshifts and throw them out (with a flag?)
+    # - Need to be able to detect invalid types of objects and throw them out (with a
+    # flag?)
+    # - Get rid of ParsnipObject altogether to make things easier. It isn't really
+    # necessary with my latest code.
+
     from .astronomical_object import ParsnipObject
 
     if name == 'plasticc_combo':
@@ -127,6 +207,8 @@ def load_dataset(name, *args, **kwargs):
         result = parse_panstarrs(dataset)
     elif dataset_type == 'plasticc':
         result = parse_plasticc(dataset)
+    elif dataset_type == 'ztf':
+        result = parse_ztf(dataset)
     else:
         raise Exception(f"Unknown dataset {name}. Specify how to handle it in utils.py")
 

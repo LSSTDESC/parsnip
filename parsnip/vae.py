@@ -16,7 +16,7 @@ from torch import nn, optim
 from torch.nn import functional as F
 
 from .astronomical_object import ParsnipObject
-from .utils import frac_to_mag
+from .utils import frac_to_mag, should_correct_mw_extinction
 
 
 class ParsnipDataLoader():
@@ -194,7 +194,7 @@ class LightCurveAutoencoder(nn.Module):
         self.bands = bands
         self.band_map = {j: i for i, j in enumerate(bands)}
         self._setup_band_weights()
-        self._calculate_band_wave_effs()
+        self._calculate_band_mw_extinctions()
 
         # Setup the color law. We scale this so that the color law has a B-V color of 1,
         # meaning that a coefficient multiplying the color law is the B-V color.
@@ -308,14 +308,27 @@ class LightCurveAutoencoder(nn.Module):
         self.band_interpolate_weights = torch.FloatTensor(band_weights).to(self.device)
         self.model_wave = 10**(model_log_wave)
 
-    def _calculate_band_wave_effs(self):
-        """Calculate the effective wavelength of each band"""
+    def _calculate_band_mw_extinctions(self):
+        """Calculate the MW extinction corrections to apply for each band.
+
+        Multiply mwebv by these values to get the extinction that should be applied
+        to each band for a specific light curve.
+
+        For bands that have already been corrected, we return 0.
+        """
         band_wave_effs = []
+        should_correct = []
         for band_name in self.bands:
             band = sncosmo.get_bandpass(band_name)
             band_wave_effs.append(band.wave_eff)
 
-        self.band_wave_effs = np.array(band_wave_effs)
+            # Zero out the correction factor for any bands that already have it applied.
+            should_correct.append(should_correct_mw_extinction(band_name))
+
+        band_wave_effs = np.array(band_wave_effs)
+        should_correct = np.array(should_correct)
+
+        self.band_mw_extinctions = should_correct * extinction.fm07(band_wave_effs, 3.1)
 
     def calculate_band_weights(self, redshifts):
         """Calculate the band weights for a given set of redshifts
@@ -929,6 +942,9 @@ class LightCurveAutoencoder(nn.Module):
                                                   encoding_logvar, amplitude_mu,
                                                   amplitude_logvar, amplitude,
                                                   model_flux, model_spectra)
+
+                        if np.isnan(loss.cpu().detach().numpy()):
+                            return amplitude_mu, batch_data, model_flux
 
                         loss.backward()
                         train_loss += loss.item()
