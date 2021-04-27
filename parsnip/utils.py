@@ -123,28 +123,23 @@ def load_dataset(name, *args, **kwargs):
     # - Get rid of ParsnipObject altogether to make things easier. It isn't really
     # necessary with my latest code.
 
-    from .astronomical_object import ParsnipObject
-
     if name == 'plasticc_combo':
         # Load a subset of the PLAsTiCC dataset for training. We can't fit the whole
         # dataset in memory at once, so we only use part of it for the unsupervised
         # training.
         dataset = (
             # Training set
-            avocado.load('plasticc_train', object_class=ParsnipObject)
+            avocado.load('plasticc_train')
 
             # DDF set
-            + avocado.load('plasticc_test', object_class=ParsnipObject, chunk=0,
-                           num_chunks=100)
+            + avocado.load('plasticc_test', chunk=0, num_chunks=100)
 
             # WFD set, load 10% of it
-            + avocado.load('plasticc_test', object_class=ParsnipObject, chunk=5,
-                           num_chunks=10)
+            + avocado.load('plasticc_test', chunk=5, num_chunks=10)
         )
     else:
         # Load the dataset as is.
-        dataset = avocado.Dataset.load(name, object_class=ParsnipObject, *args,
-                                       **kwargs)
+        dataset = avocado.Dataset.load(name, *args, **kwargs)
 
     # Parse the dataset to figure out what we need to do with it.
     dataset_type = name.split('_')[0]

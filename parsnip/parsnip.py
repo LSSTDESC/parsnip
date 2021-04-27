@@ -15,7 +15,7 @@ import torch.utils.data
 from torch import nn, optim
 from torch.nn import functional as F
 
-from .astronomical_object import ParsnipObject
+from .astronomical_object import preprocess_astronomical_object
 from .utils import frac_to_mag
 from .settings import parse_settings
 
@@ -364,10 +364,11 @@ class ParsnipModel(nn.Module):
 
             # Run on a single core without multiprocessing
             for obj in iterator:
-                obj.preprocess(self.settings)
+                preprocess_astronomical_object(obj)
         else:
             # Run with multiprocessing in multiple threads.
-            func = functools.partial(ParsnipObject.preprocess, settings=self.settings)
+            func = functools.partial(preprocess_astronomical_object,
+                                     settings=self.settings)
 
             with multiprocessing.Pool(threads) as p:
                 iterator = p.imap(func, dataset.objects, chunksize=chunksize)
