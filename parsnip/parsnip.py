@@ -119,7 +119,7 @@ class GlobalMaxPoolingTime(nn.Module):
         return out
 
 
-class LightCurveAutoencoder(nn.Module):
+class ParsnipModel(nn.Module):
     def __init__(self, name, bands, device='cpu', threads=8, augment=False,
                  settings={}):
         super().__init__()
@@ -343,17 +343,17 @@ class LightCurveAutoencoder(nn.Module):
         sncosmo_photometry = model.bandflux(self.settings['bands'], 0., zp=-20.,
                                             zpsys=self.settings['magsys'])
 
-        # autoencoder photometry
+        # parsnip photometry
         model.set(z=0.)
         model_flux = model._flux(0., self.model_wave)[0]
         band_weights = self.calculate_band_weights(
             torch.FloatTensor([redshift]))[0].numpy()
-        autoencoder_photometry = np.sum(model_flux[:, None] * band_weights, axis=0)
+        parsnip_photometry = np.sum(model_flux[:, None] * band_weights, axis=0)
 
         print(f"z = {redshift}")
         print(f"sncosmo photometry:     {sncosmo_photometry}")
-        print(f"autoencoder photometry: {autoencoder_photometry}")
-        print(f"ratio:                  {autoencoder_photometry / sncosmo_photometry}")
+        print(f"parsnip photometry:     {parsnip_photometry}")
+        print(f"ratio:                  {parsnip_photometry / sncosmo_photometry}")
 
     def preprocess(self, dataset, threads=8, chunksize=64, verbose=True):
         """Preprocess a dataset"""
@@ -382,9 +382,7 @@ class LightCurveAutoencoder(nn.Module):
                 obj.preprocess_data = obj_data
 
     def get_data(self, objects):
-        """Extract the data needed from an object or set of objects needed to run the
-        autoencoder.
-        """
+        """Extract the data from an object or set of objects needed for ParSNIP."""
         # Check if we have a list of objects or a single one and handle it
         # appropriately.
         try:
@@ -1198,3 +1196,6 @@ class LightCurveAutoencoder(nn.Module):
         )
 
         return model_spectra[..., 0]
+
+
+load_model = ParsnipModel.load

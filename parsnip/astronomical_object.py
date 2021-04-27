@@ -90,7 +90,7 @@ class ParsnipObject(avocado.AstronomicalObject):
         return new_obj
 
     def preprocess(self, settings):
-        """Preprocess the light curve and package it as needed for the autoencoder"""
+        """Preprocess the light curve and package it as needed for ParSNIP"""
         # Align the observations to a grid in sidereal time.
         reference_time = self._determine_time_grid()
 

@@ -77,7 +77,7 @@ if __name__ == '__main__':
     # Maximum number of epochs to train for
     max_epochs = args.pop('max_epochs')
 
-    model = parsnip.LightCurveAutoencoder(
+    model = parsnip.ParsnipModel(
         model_name,
         bands,
         device=device,

@@ -72,7 +72,7 @@ if __name__ == '__main__':
     augments = args.pop('augments')
 
     # Load the model
-    model = parsnip.LightCurveAutoencoder(
+    model = parsnip.ParsnipModel(
         model_name,
         bands,
         device=device,
