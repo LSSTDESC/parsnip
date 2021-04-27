@@ -25,11 +25,11 @@ def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
     max_model = 0.
 
     # Use the offset from the model to get t=0
-    ref_time = model_result[0][0, 0] * model.time_sigma
+    ref_time = model_result[0][0, 0] * model.settings['time_sigma']
     time = time - ref_time
     model_times = model_times - ref_time
 
-    for band_idx, band_name in enumerate(model.band_map):
+    for band_idx, band_name in enumerate(model.settings['bands']):
         c = avocado.get_band_plot_color(band_name)
         marker = avocado.get_band_plot_marker(band_name)
 

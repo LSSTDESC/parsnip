@@ -4,60 +4,6 @@ import numpy as np
 import os
 
 
-band_info = {
-    # Information about all of the different bands and how to handle them. We assume
-    # that all data from the same telescope should be processed the same way.
-
-    # Band name     Correct     Correct
-    #               Background  MWEBV
-
-    # PanSTARRS
-    'ps1::g':       (True,      True),
-    'ps1::r':       (True,      True),
-    'ps1::i':       (True,      True),
-    'ps1::z':       (True,      True),
-
-    # PLAsTICC
-    'lsstu':        (True,      False),
-    'lsstg':        (True,      False),
-    'lsstr':        (True,      False),
-    'lssti':        (True,      False),
-    'lsstz':        (True,      False),
-    'lssty':        (True,      False),
-
-    # ZTF
-    'ztfr':         (False,     True),
-    'ztfg':         (False,     True),
-    'ztfi':         (False,     True),
-
-    # SWIFT
-    'uvot::u':      (False,     True),
-    'uvot::b':      (False,     True),
-    'uvot::v':      (False,     True),
-    'uvot::uvm2':   (False,     True),
-    'uvot::uvw1':   (False,     True),
-    'uvot::uvw2':   (False,     True),
-}
-
-
-def should_correct_background(bandpass):
-    """Check if the background level should be corrected for a given bandpass"""
-    try:
-        return band_info[bandpass][0]
-    except KeyError:
-        raise Exception(f"Can't handle bandpass {bandpass}. Add it to band_info in "
-                        "utils.py")
-
-
-def should_correct_mw_extinction(bandpass):
-    """Check if Milky Way extinction should be corrected for a given bandpass"""
-    try:
-        return band_info[bandpass][1]
-    except KeyError:
-        raise Exception(f"Can't handle bandpass {bandpass}. Add it to band_info in "
-                        "utils.py")
-
-
 def parse_panstarrs(dataset):
     """Parse a PanSTARRS dataset"""
     # Throw out light curves that don't have good redshifts or are otherwise bad.
@@ -246,6 +192,7 @@ def split_train_test(dataset):
 def load_panstarrs_bandpasses():
     """Download and load the panstarrs bandpasses into sncosmo"""
     # Figure out where the bandpass data file ended up.
+    # TODO: Download this data if it isn't on disk.
     dirname = os.path.dirname
     package_root_directory = dirname(dirname(os.path.abspath(__file__)))
 

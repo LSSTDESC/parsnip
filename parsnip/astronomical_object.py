@@ -5,8 +5,6 @@ import scipy.stats
 from astropy.stats import biweight_location
 import avocado
 
-from .utils import should_correct_background
-
 SIDEREAL_SCALE = 86400. / 86164.0905
 
 
@@ -91,46 +89,49 @@ class ParsnipObject(avocado.AstronomicalObject):
 
         return new_obj
 
-    def preprocess(self, autoencoder):
+    def preprocess(self, settings):
         """Preprocess the light curve and package it as needed for the autoencoder"""
         # Align the observations to a grid in sidereal time.
         reference_time = self._determine_time_grid()
 
         # Map each band to its corresponding index.
         obs = self.observations.copy()
-        obs['band_indices'] = [autoencoder.band_map.get(i, -1) for i in obs['band']]
+        band_map = {j: i for i, j in enumerate(settings['bands'])}
+        obs['band_indices'] = [band_map.get(i, -1) for i in obs['band']]
 
         # Cut out any observations that are outside of the window that we are
         # considering.
         grid_times = self.time_to_grid(self.observations['time'], reference_time)
-        time_indices = np.round(grid_times).astype(int) + autoencoder.center_time_bin
+        time_indices = np.round(grid_times).astype(int) + settings['time_window'] // 2
         time_mask = (
-            (time_indices >= -autoencoder.time_pad)
-            & (time_indices < autoencoder.time_window + autoencoder.time_pad)
+            (time_indices >= -settings['time_pad'])
+            & (time_indices < settings['time_window'] + settings['time_pad'])
         )
         obs['grid_times'] = grid_times
         obs['time_indices'] = time_indices
 
         # Correct background levels for bands that need it.
-        for band_idx, band_name in enumerate(autoencoder.bands):
-            if should_correct_background(band_name):
-                band_mask = obs['band_indices'] == band_idx
-                # Find observations outside of our window.
-                outside_obs = obs[~time_mask & band_mask]
-                if len(outside_obs) == 0:
-                    # No outside observations, don't update the background level.
-                    continue
+        for band_idx, do_correction in enumerate(settings['band_correct_background']):
+            if not do_correction:
+                continue
 
-                # Estimate the background level and subtract it.
-                background = biweight_location(outside_obs['flux'])
-                obs.loc[band_mask, 'flux'] -= background
+            band_mask = obs['band_indices'] == band_idx
+            # Find observations outside of our window.
+            outside_obs = obs[~time_mask & band_mask]
+            if len(outside_obs) == 0:
+                # No outside observations, don't update the background level.
+                continue
+
+            # Estimate the background level and subtract it.
+            background = biweight_location(outside_obs['flux'])
+            obs.loc[band_mask, 'flux'] -= background
 
         # Cut out observations that are in unused bands or outside of the time window.
         band_mask = obs['band_indices'] != -1
         obs = obs[band_mask & time_mask]
 
         # Correct for Milky Way extinction if desired.
-        band_extinctions = autoencoder.band_mw_extinctions * self.metadata['mwebv']
+        band_extinctions = settings['band_mw_extinctions'] * self.metadata['mwebv']
         extinction_scales = 10**(0.4 * band_extinctions[obs['band_indices']])
         obs['flux'] *= extinction_scales
         obs['flux_error'] *= extinction_scales

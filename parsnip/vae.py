@@ -16,13 +16,14 @@ from torch import nn, optim
 from torch.nn import functional as F
 
 from .astronomical_object import ParsnipObject
-from .utils import frac_to_mag, should_correct_mw_extinction
+from .utils import frac_to_mag
+from .settings import parse_settings
 
 
 class ParsnipDataLoader():
-    def __init__(self, dataset, autoencoder, shuffle=False):
+    def __init__(self, dataset, model, shuffle=False):
         self.dataset = dataset
-        self.autoencoder = autoencoder
+        self.model = model
         self.shuffle = shuffle
 
         if self.shuffle:
@@ -35,7 +36,7 @@ class ParsnipDataLoader():
 
     def __getitem__(self, index):
         objects = self._ordered_objects[index]
-        return self.autoencoder.get_data(objects)
+        return self.model.get_data(objects)
 
     def __iter__(self):
         """Setup iteration over batches"""
@@ -44,8 +45,8 @@ class ParsnipDataLoader():
 
     def __next__(self):
         """Retrieve the next batch"""
-        start = self.batch_idx * self.autoencoder.batch_size
-        end = (self.batch_idx + 1) * self.autoencoder.batch_size
+        start = self.batch_idx * self.model.settings['batch_size']
+        end = (self.batch_idx + 1) * self.model.settings['batch_size']
         if start >= len(self):
             raise StopIteration
         else:
@@ -55,7 +56,7 @@ class ParsnipDataLoader():
     @property
     def num_batches(self):
         """Return the number of batches that this dataset is split into"""
-        return 1 + (len(self) + 1) // self.autoencoder.batch_size
+        return 1 + (len(self) + 1) // self.model.settings['batch_size']
 
 
 class ResidualBlock(nn.Module):
@@ -119,115 +120,79 @@ class GlobalMaxPoolingTime(nn.Module):
 
 
 class LightCurveAutoencoder(nn.Module):
-    def __init__(
-        self,
-        name,
-        bands,
-        device='cuda',
-        min_wave=1000.,
-        max_wave=11000.,
-        spectrum_bins=300,
-        max_redshift=4.,
-        band_oversampling=51,
-        time_window=300,
-        time_pad=100,
-        time_sigma=20.,
-        color_sigma=0.3,
-        magsys='ab',
-        error_floor=0.01,
-
-        batch_size=128,
-        learning_rate=1e-3,
-        scheduler_factor=0.5,
-        min_learning_rate=1e-5,
-        penalty=1e-3,
-        augment=True,
-
-        latent_size=3,
-        input_redshift=True,
-        encode_block='residual',
-        encode_conv_architecture=[40, 80, 120, 160, 200, 200, 200],
-        encode_conv_dilations=[1, 2, 4, 8, 16, 32, 64],
-        encode_fc_architecture=[200],
-        encode_time_architecture=[200],
-        encode_latent_prepool_architecture=[200],
-        encode_latent_postpool_architecture=[200],
-        decode_architecture=[40, 80, 160],
-    ):
-
+    def __init__(self, name, bands, device='cpu', threads=8, augment=False,
+                 settings={}):
         super().__init__()
 
-        # Figure out if CUDA is available and if we want to use it.
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
-        self.batch_size = batch_size
+        # Parse settings
+        self.settings = parse_settings(name, bands, settings)
 
         self.name = name
-        self.latent_size = latent_size
-        self.min_wave = min_wave
-        self.max_wave = max_wave
-        self.spectrum_bins = spectrum_bins
-        self.max_redshift = max_redshift
-        self.band_oversampling = band_oversampling
-        self.time_window = time_window
-        self.time_pad = time_pad
-        self.time_sigma = time_sigma
-        self.color_sigma = color_sigma
-        self.magsys = magsys
-        self.error_floor = error_floor
-
-        self.input_redshift = input_redshift
-        self.encode_block = encode_block
-        self.encode_conv_architecture = encode_conv_architecture
-        self.encode_conv_dilations = encode_conv_dilations
-        self.encode_fc_architecture = encode_fc_architecture
-        self.encode_time_architecture = encode_time_architecture
-        self.encode_latent_prepool_architecture = encode_latent_prepool_architecture
-        self.encode_latent_postpool_architecture = encode_latent_postpool_architecture
-        self.decode_architecture = decode_architecture
-
-        self.learning_rate = learning_rate
-        self.min_learning_rate = min_learning_rate
-        self.penalty = penalty
         self.augment = augment
+        self.threads = threads
+
+        # Setup the device
+        self.device = self._parse_device(device)
 
         # Setup the bands
-        self.bands = bands
-        self.band_map = {j: i for i, j in enumerate(bands)}
         self._setup_band_weights()
-        self._calculate_band_mw_extinctions()
 
         # Setup the color law. We scale this so that the color law has a B-V color of 1,
-        # meaning that a coefficient multiplying the color law is the B-V color.
+        # meaning that a coefficient multiplying the color law is the b-v color.
         color_law = extinction.fm07(self.model_wave, 3.1)
         self.color_law = torch.FloatTensor(color_law).to(self.device)
 
         # Setup the timing
-        self.center_time_bin = self.time_window // 2
-        self.input_times = (torch.arange(self.time_window, device=self.device)
-                            - self.center_time_bin)
+        self.input_times = (torch.arange(self.settings['time_window'],
+                                         device=self.device)
+                            - self.settings['time_window'] // 2)
 
         # Build the model
         self.build_model()
 
-        # Setup the training
+        # Set up the training
         self.epoch = 0
-        self.optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
+        self.optimizer = optim.Adam(self.parameters(),
+                                    lr=self.settings['learning_rate'])
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, factor=scheduler_factor, verbose=True
+            self.optimizer, factor=self.settings['scheduler_factor'], verbose=True
         )
 
-        # Send the model to the desired device
+        # Send the model weights to the desired device
         self.to(self.device, force=True)
+
+    @classmethod
+    def _parse_device(cls, device):
+        """Figure out which device to use."""
+        # Figure out which device to run on.
+        if device == 'cpu':
+            # Requested CPU.
+            use_device = 'cpu'
+        elif torch.cuda.is_available():
+            # Requested GPU and it is available.
+            use_device = device
+        else:
+            print(f"WARNING: Device '{device}' not available, using 'cpu' instead.")
+            use_device = 'cpu'
+
+        return use_device
 
     def to(self, device, force=False):
         """Send the model to the given device"""
-        new_device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        new_device = self._parse_device(device)
 
         if self.device == new_device and not force:
             # Already on that device
             return
 
         self.device = new_device
+
+        # Set the number of threads to 1 if running on the GPU, or a larger number if
+        # running on CPU.
+        if self.device == 'cpu':
+            torch.set_num_threads(self.threads)
+        else:
+            torch.set_num_threads(1)
 
         # Send all of the weights
         super().to(self.device)
@@ -240,27 +205,57 @@ class LightCurveAutoencoder(nn.Module):
             self.band_interpolate_locations.to(self.device)
         self.band_interpolate_weights = self.band_interpolate_weights.to(self.device)
 
+    @classmethod
+    def _get_model_path(cls, name):
+        return f'./models/{name}.pt'
+
+    @property
+    def model_path(self):
+        return self._get_model_path(self.settings['name'])
+
+    def save(self):
+        """Save the model"""
+        path = self.model_path
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save([self.settings, self.state_dict()], path)
+
+    @classmethod
+    def load(cls, name, device='cpu', threads=8, augment=False):
+        """Load a model"""
+
+        # Load the model data
+        path = cls._get_model_path(name)
+        use_device = cls._parse_device(device)
+        settings, state_dict = torch.load(path, use_device)
+
+        # Instantiate the model
+        model = cls(name, settings['bands'], use_device, threads, augment, settings)
+        model.load_state_dict(state_dict)
+
+        return model
+
     def _setup_band_weights(self):
         """Setup the interpolation for the band weights used for photometry"""
         # Build the model in log wavelength
-        model_log_wave = np.linspace(np.log10(self.min_wave), np.log10(self.max_wave),
-                                     self.spectrum_bins)
+        model_log_wave = np.linspace(np.log10(self.settings['min_wave']),
+                                     np.log10(self.settings['max_wave']),
+                                     self.settings['spectrum_bins'])
         model_spacing = model_log_wave[1] - model_log_wave[0]
 
-        band_spacing = model_spacing / self.band_oversampling
+        band_spacing = model_spacing / self.settings['band_oversampling']
         band_max_log_wave = (
-            np.log10(self.max_wave * (1 + self.max_redshift))
+            np.log10(self.settings['max_wave'] * (1 + self.settings['max_redshift']))
             + band_spacing
         )
 
         # Oversampling must be odd.
-        assert self.band_oversampling % 2 == 1
-        pad = (self.band_oversampling - 1) // 2
-        band_log_wave = np.arange(np.log10(self.min_wave), band_max_log_wave,
-                                  band_spacing)
+        assert self.settings['band_oversampling'] % 2 == 1
+        pad = (self.settings['band_oversampling'] - 1) // 2
+        band_log_wave = np.arange(np.log10(self.settings['min_wave']),
+                                  band_max_log_wave, band_spacing)
         band_wave = 10**(band_log_wave)
         band_pad_log_wave = np.arange(
-            np.log10(self.min_wave) - band_spacing * pad,
+            np.log10(self.settings['min_wave']) - band_spacing * pad,
             band_max_log_wave + band_spacing * pad,
             band_spacing
         )
@@ -269,18 +264,18 @@ class LightCurveAutoencoder(nn.Module):
             - 10**(band_pad_log_wave - band_spacing / 2.)
         )
 
-        ref = sncosmo.get_magsystem(self.magsys)
+        ref = sncosmo.get_magsystem(self.settings['magsys'])
 
         band_weights = []
 
-        for band_name in self.bands:
+        for band_name in self.settings['bands']:
             band = sncosmo.get_bandpass(band_name)
             band_transmission = band(10**(band_pad_log_wave))
 
             # Convolve the bands to match the sampling of the spectrum.
             band_conv_transmission = np.convolve(
                 band_transmission * band_pad_dwave,
-                np.ones(self.band_oversampling),
+                np.ones(self.settings['band_oversampling']),
                 mode='valid'
             )
 
@@ -298,8 +293,8 @@ class LightCurveAutoencoder(nn.Module):
         # get the locations at any redshift.
         band_interpolate_locations = torch.arange(
             0,
-            self.spectrum_bins * self.band_oversampling,
-            self.band_oversampling
+            self.settings['spectrum_bins'] * self.settings['band_oversampling'],
+            self.settings['band_oversampling']
         )
 
         # Save the variables that we need to do interpolation.
@@ -307,28 +302,6 @@ class LightCurveAutoencoder(nn.Module):
         self.band_interpolate_spacing = band_spacing
         self.band_interpolate_weights = torch.FloatTensor(band_weights).to(self.device)
         self.model_wave = 10**(model_log_wave)
-
-    def _calculate_band_mw_extinctions(self):
-        """Calculate the MW extinction corrections to apply for each band.
-
-        Multiply mwebv by these values to get the extinction that should be applied
-        to each band for a specific light curve.
-
-        For bands that have already been corrected, we return 0.
-        """
-        band_wave_effs = []
-        should_correct = []
-        for band_name in self.bands:
-            band = sncosmo.get_bandpass(band_name)
-            band_wave_effs.append(band.wave_eff)
-
-            # Zero out the correction factor for any bands that already have it applied.
-            should_correct.append(should_correct_mw_extinction(band_name))
-
-        band_wave_effs = np.array(band_wave_effs)
-        should_correct = np.array(should_correct)
-
-        self.band_mw_extinctions = should_correct * extinction.fm07(band_wave_effs, 3.1)
 
     def calculate_band_weights(self, redshifts):
         """Calculate the band weights for a given set of redshifts
@@ -367,7 +340,8 @@ class LightCurveAutoencoder(nn.Module):
 
         # sncosmo photometry
         model.set(z=redshift)
-        sncosmo_photometry = model.bandflux(self.bands, 0., zp=-20., zpsys=self.magsys)
+        sncosmo_photometry = model.bandflux(self.settings['bands'], 0., zp=-20.,
+                                            zpsys=self.settings['magsys'])
 
         # autoencoder photometry
         model.set(z=0.)
@@ -390,17 +364,10 @@ class LightCurveAutoencoder(nn.Module):
 
             # Run on a single core without multiprocessing
             for obj in iterator:
-                obj.preprocess(self)
+                obj.preprocess(self.settings)
         else:
             # Run with multiprocessing in multiple threads.
-            # For multiprocessing, everything has to be on the CPU. Send the current
-            # model to the CPU, and keep track of where it was.
-            # TODO: all that we need is the settings. Refactor the code so that we
-            # don't have to move the whole model around.
-            current_device = self.device
-            self.to('cpu')
-
-            func = functools.partial(ParsnipObject.preprocess, autoencoder=self)
+            func = functools.partial(ParsnipObject.preprocess, settings=self.settings)
 
             with multiprocessing.Pool(threads) as p:
                 iterator = p.imap(func, dataset.objects, chunksize=chunksize)
@@ -413,9 +380,6 @@ class LightCurveAutoencoder(nn.Module):
             # Save them manually.
             for obj, obj_data in zip(dataset.objects, data):
                 obj.preprocess_data = obj_data
-
-            # Move us back to the appropriate device
-            self.to(current_device)
 
     def get_data(self, objects):
         """Extract the data needed from an object or set of objects needed to run the
@@ -457,7 +421,9 @@ class LightCurveAutoencoder(nn.Module):
             redshifts.append(obj.metadata['redshift'])
 
             if self.augment:
-                time_shift = np.round(np.random.normal(0., self.time_sigma)).astype(int)
+                time_shift = np.round(
+                    np.random.normal(0., self.settings['time_sigma'])
+                ).astype(int)
                 amp_scale = np.exp(np.random.normal(0, 0.5))
             else:
                 time_shift = 0
@@ -474,7 +440,8 @@ class LightCurveAutoencoder(nn.Module):
             obj_batch_indices = np.ones_like(obj_band_indices) * idx
 
             # Mask out data that is outside of the window of the input.
-            mask = (obj_time_indices >= 0) & (obj_time_indices < self.time_window)
+            mask = (obj_time_indices >= 0) & (obj_time_indices <
+                                              self.settings['time_window'])
 
             if self.augment:
                 # Choose a fraction of observations to randomly drop
@@ -507,7 +474,7 @@ class LightCurveAutoencoder(nn.Module):
 
             # Compute the weight that will be used for comparing the model to the input
             # data. We use the observed error with an error floor.
-            obj_weight = 1. / (obj_flux_error**2 + self.error_floor**2)
+            obj_weight = 1. / (obj_flux_error**2 + self.settings['error_floor']**2)
 
             # Stack all of the data that will be used for comparisons and convert it to
             # a torch tensor.
@@ -538,19 +505,20 @@ class LightCurveAutoencoder(nn.Module):
         amp_scales = np.array(amp_scales)
 
         # Build a grid for the input
-        grid_flux = np.zeros((len(objects), len(self.bands), self.time_window))
+        grid_flux = np.zeros((len(objects), len(self.settings['bands']),
+                              self.settings['time_window']))
         grid_weights = np.zeros_like(grid_flux)
 
         grid_flux[batch_indices, band_indices, time_indices] = fluxes
         grid_weights[batch_indices, band_indices, time_indices] = weights
 
         # Scale the weights so that they are between 0 and 1.
-        grid_weights *= self.error_floor**2
+        grid_weights *= self.settings['error_floor']**2
 
         # Stack the input data
-        if self.input_redshift:
+        if self.settings['input_redshift']:
             input_data = np.concatenate([
-                redshifts[:, None, None].repeat(self.time_window, axis=2),
+                redshifts[:, None, None].repeat(self.settings['time_window'], axis=2),
                 grid_flux,
                 grid_weights,
             ], axis=1)
@@ -578,32 +546,33 @@ class LightCurveAutoencoder(nn.Module):
 
     def build_model(self):
         """Build the model"""
-        if self.input_redshift:
-            input_size = len(self.bands) * 2 + 1
+        if self.settings['input_redshift']:
+            input_size = len(self.settings['bands']) * 2 + 1
         else:
-            input_size = len(self.bands) * 2
+            input_size = len(self.settings['bands']) * 2
 
-        if self.encode_block == 'conv1d':
+        if self.settings['encode_block'] == 'conv1d':
             encode_block = Conv1dBlock
-        elif self.encode_block == 'residual':
+        elif self.settings['encode_block'] == 'residual':
             encode_block = ResidualBlock
         else:
-            raise Exception(f"Unknown block {self.encode_block}.")
+            raise Exception(f"Unknown block {self.settings['encode_block']}.")
 
-        # Encoder architecture. We start with an input of size input_size x
-        # self.time_window. We apply a series of convolutional blocks to this that
-        # produce outputs that are the same size. The type of block is specified by
-        # self.encode_block. Each convolutional block has a dilation that is given by
-        # self.encode_conv_dilations.
-        if len(self.encode_conv_architecture) != len(self.encode_conv_dilations):
+        # Encoder architecture.  We start with an input of size input_size x
+        # time_window We apply a series of convolutional blocks to this that produce
+        # outputs that are the same size.  The type of block is specified by
+        # settings['encode_block'].  Each convolutional block has a dilation that is
+        # given by settings['encode_conv_dilations'].
+        if (len(self.settings['encode_conv_architecture']) !=
+                len(self.settings['encode_conv_dilations'])):
             raise Exception("Layer sizes and dilations must have the same length!")
 
         encode_layers = []
 
         # Convolutional layers.
         last_size = input_size
-        for layer_size, dilation in zip(self.encode_conv_architecture,
-                                        self.encode_conv_dilations):
+        for layer_size, dilation in zip(self.settings['encode_conv_architecture'],
+                                        self.settings['encode_conv_dilations']):
             encode_layers.append(
                 encode_block(last_size, layer_size, dilation)
             )
@@ -612,7 +581,7 @@ class LightCurveAutoencoder(nn.Module):
         # Fully connected layers for the encoder following the convolution blocks.
         # These are Conv1D layers with a kernel size of 1 that mix within the time
         # indexes.
-        for layer_size in self.encode_fc_architecture:
+        for layer_size in self.settings['encode_fc_architecture']:
             encode_layers.append(nn.Conv1d(last_size, layer_size, 1))
             encode_layers.append(nn.ReLU())
             last_size = layer_size
@@ -623,7 +592,7 @@ class LightCurveAutoencoder(nn.Module):
         # with a kernel size of 1 that mix within time indexes.
         time_last_size = last_size
         encode_time_layers = []
-        for layer_size in self.encode_time_architecture:
+        for layer_size in self.settings['encode_time_architecture']:
             encode_time_layers.append(nn.Conv1d(time_last_size, layer_size, 1))
             encode_time_layers.append(nn.ReLU())
             time_last_size = layer_size
@@ -635,7 +604,7 @@ class LightCurveAutoencoder(nn.Module):
         # Fully connected layers to calculate the latent space parameters for the VAE.
         encode_latent_layers = []
         latent_last_size = last_size
-        for layer_size in self.encode_latent_prepool_architecture:
+        for layer_size in self.settings['encode_latent_prepool_architecture']:
             encode_latent_layers.append(nn.Conv1d(latent_last_size, layer_size, 1))
             encode_latent_layers.append(nn.ReLU())
             latent_last_size = layer_size
@@ -644,7 +613,7 @@ class LightCurveAutoencoder(nn.Module):
         encode_latent_layers.append(GlobalMaxPoolingTime())
 
         # Apply fully connected layers to get the embedding.
-        for layer_size in self.encode_latent_postpool_architecture:
+        for layer_size in self.settings['encode_latent_postpool_architecture']:
             encode_latent_layers.append(nn.Linear(latent_last_size, layer_size))
             encode_latent_layers.append(nn.ReLU())
             latent_last_size = layer_size
@@ -652,25 +621,29 @@ class LightCurveAutoencoder(nn.Module):
         self.encode_latent_layers = nn.Sequential(*encode_latent_layers)
 
         # Finally, use a last FC layer to get mu and logvar
-        self.encode_mu_layer = nn.Linear(latent_last_size, self.latent_size + 1)
-        self.encode_logvar_layer = nn.Linear(latent_last_size, self.latent_size + 2)
+        self.encode_mu_layer = nn.Linear(latent_last_size,
+                                         self.settings['latent_size'] + 1)
+        self.encode_logvar_layer = nn.Linear(latent_last_size,
+                                             self.settings['latent_size'] + 2)
 
         # MLP decoder. We start with an input that is the intrinsic latent space + one
-        # dimension for time, and output a spectrum of size self.spectrum_bins. We also
-        # have hidden layers with sizes given by self.decode_layers. We implement this
-        # using a Conv1D layer with a kernel size of 1 for computational reasons so
-        # that it decodes multiple spectra for each transient all at the same time, but
-        # the decodes are all done independently so this is really an MLP.
-        decode_last_size = self.latent_size + 1
+        # dimension for time, and output a spectrum of size
+        # self.settings['spectrum_bins'].  We also have hidden layers with sizes given
+        # by self.settings['decode_layers'].  We implement this using a Conv1D layer
+        # with a kernel size of 1 for computational reasons so that it decodes multiple
+        # spectra for each transient all at the same time, but the decodes are all done
+        # independently so this is really an MLP.
+        decode_last_size = self.settings['latent_size'] + 1
         decode_layers = []
-        for layer_size in self.decode_architecture:
+        for layer_size in self.settings['decode_architecture']:
             decode_layers.append(nn.Conv1d(decode_last_size, layer_size, 1))
             decode_layers.append(nn.Tanh())
             decode_last_size = layer_size
 
         # Final layer. Use a FC layer to get us to the correct number of bins, and use
         # a softplus activation function to get positive flux.
-        decode_layers.append(nn.Conv1d(decode_last_size, self.spectrum_bins, 1))
+        decode_layers.append(nn.Conv1d(decode_last_size,
+                                       self.settings['spectrum_bins'], 1))
         decode_layers.append(nn.Softplus())
 
         self.decode_layers = nn.Sequential(*decode_layers)
@@ -686,7 +659,10 @@ class LightCurveAutoencoder(nn.Module):
         # Apply the time-indexing layer to calculate the reference time. This is a
         # special layer that is invariant to translations of the input.
         t_vec = torch.nn.functional.softmax(torch.squeeze(e_time, 1), dim=1)
-        ref_time_mu = torch.sum(t_vec * self.input_times, 1) / self.time_sigma
+        ref_time_mu = (
+            torch.sum(t_vec * self.input_times, 1)
+            / self.settings['time_sigma']
+        )
 
         # Latent space branch.
         e_latent = self.encode_latent_layers(e)
@@ -711,7 +687,7 @@ class LightCurveAutoencoder(nn.Module):
         repeat_encoding = encoding[:, :, None].expand((-1, -1, times.shape[1]))
         use_times = (
             (times - ref_times[:, None])
-            / (self.time_window // 2)
+            / (self.settings['time_window'] // 2)
             / (1 + redshifts[:, None])
         )
 
@@ -760,17 +736,16 @@ class LightCurveAutoencoder(nn.Module):
                                               sample=sample)
 
         # Rescale variables
-        ref_times = sample_encoding[:, 0] * self.time_sigma
-        color = sample_encoding[:, 1] * self.color_sigma
+        ref_times = sample_encoding[:, 0] * self.settings['time_sigma']
+        color = sample_encoding[:, 1] * self.settings['color_sigma']
         encoding = sample_encoding[:, 2:]
 
         # Constrain the color and reference time so that things don't go to crazy values
         # and throw everything off with floating point precision errors. This will not
         # be a concern for a properly trained model, but things can go wrong early in
         # the training at high learning rates.
-        color = torch.clamp(color, -10. * self.color_sigma, 10. * self.color_sigma)
-        ref_times = torch.clamp(ref_times, -10. * self.time_sigma,
-                                10. * self.time_sigma)
+        color = torch.clamp(color / self.settings['time_sigma'], -10., 10.)
+        ref_times = torch.clamp(ref_times / self.settings['time_sigma'], -10., 10.)
 
         return ref_times, color, encoding
 
@@ -829,7 +804,7 @@ class LightCurveAutoencoder(nn.Module):
             (model_spectra[:, 1:, :] - model_spectra[:, :-1, :])
             / (model_spectra[:, 1:, :] + model_spectra[:, :-1, :])
         )
-        penalty = self.penalty * torch.sum(diff**2)
+        penalty = self.settings['penalty'] * torch.sum(diff**2)
 
         # Amplitude probability for the importance sampling integral
         amp_prob = -0.5 * torch.sum((amplitude - amplitude_mu)**2 /
@@ -976,25 +951,15 @@ class LightCurveAutoencoder(nn.Module):
 
             self.scheduler.step(train_loss)
 
-            # Save the model
-            # TODO: Save the model architecture with the model too so that we can
-            # recreate it.
-            os.makedirs('./models/', exist_ok=True)
-            torch.save(self.state_dict(), f'./models/{self.name}.pt')
+            # Checkpoint and save the model
+            self.save()
 
             # Check if the learning rate is below our threshold, and exit if it is.
             lr = self.optimizer.param_groups[0]['lr']
-            if lr < self.min_learning_rate:
+            if lr < self.settings['min_learning_rate']:
                 break
 
             self.epoch += 1
-
-    def load(self):
-        """Load the model weights
-
-        TODO: Load the model architecture along with the weights.
-        """
-        self.load_state_dict(torch.load(f'./models/{self.name}.pt', self.device))
 
     def predict_dataset(self, dataset, sample=False):
         predictions = []
@@ -1018,15 +983,16 @@ class LightCurveAutoencoder(nn.Module):
 
             # Pull out the keys that we care about saving.
             batch_predictions = {
-                'reference_time': encoding_mu[:, 0] * self.time_sigma,
-                'reference_time_error': encoding_err[:, 0] * self.time_sigma,
-                'color': encoding_mu[:, 1] * self.color_sigma,
-                'color_error': encoding_err[:, 1] * self.color_sigma,
+                'reference_time': encoding_mu[:, 0] * self.settings['time_sigma'],
+                'reference_time_error': (encoding_err[:, 0] *
+                                         self.settings['time_sigma']),
+                'color': encoding_mu[:, 1] * self.settings['color_sigma'],
+                'color_error': encoding_err[:, 1] * self.settings['color_sigma'],
                 'amplitude': amplitude_mu / amp_scales,
                 'amplitude_error': np.sqrt(np.exp(amplitude_logvar)) / amp_scales,
             }
 
-            for idx in range(self.latent_size):
+            for idx in range(self.settings['latent_size']):
                 batch_predictions[f's{idx+1}'] = encoding_mu[:, 2 + idx]
                 batch_predictions[f's{idx+1}_error'] = encoding_err[:, 2 + idx]
 
@@ -1201,20 +1167,20 @@ class LightCurveAutoencoder(nn.Module):
 
     def predict_light_curve(self, obj, count=0, sampling=1., pad=0.):
         # Figure out where to sample the light curve
-        min_time = -self.time_window / 2. - pad
-        max_time = self.time_window / 2. + pad
+        min_time = -self.settings['time_window'] / 2. - pad
+        max_time = self.settings['time_window'] / 2. + pad
         model_times = np.arange(min_time, max_time + sampling, sampling)
 
-        bands = np.arange(len(self.band_map))
+        band_indices = np.arange(len(self.settings['bands']))
 
-        pred_times = np.tile(model_times, len(bands))
-        pred_bands = np.repeat(bands, len(model_times))
+        pred_times = np.tile(model_times, len(band_indices))
+        pred_bands = np.repeat(band_indices, len(model_times))
 
         model_flux, model_spectra, data, model_result = self._predict_single(
             obj, pred_times, pred_bands, count)
 
         # Reshape model_flux so that it has the shape (batch, band, time)
-        model_flux = model_flux.reshape((-1, len(bands), len(model_times)))
+        model_flux = model_flux.reshape((-1, len(band_indices), len(model_times)))
 
         if count == 0:
             # Get rid of the batch index
