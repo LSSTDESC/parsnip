@@ -3,102 +3,69 @@ import numpy as np
 import os
 import sys
 import parsnip
-import torch
-import argparse
 import time
-
-
-def parse_int_list(text):
-    result = [int(i) for i in text.split(',')]
-    return result
 
 
 if __name__ == '__main__':
     start_time = time.time()
 
-    parser = argparse.ArgumentParser(description='Train a Parsnip model',
-                                     argument_default=argparse.SUPPRESS)
-    parser.add_argument('dataset')
-    parser.add_argument('model')
+    parser = parsnip.build_default_argparse('Train a ParSNIP model.')
 
-    parser.add_argument('--overwrite', action='store_true', default=False)
+    parser.add_argument('model')
+    parser.add_argument('dataset', nargs='+')
+
+    parser.add_argument('--no_augment', action='store_false', dest='augment')
+    parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--max_epochs', type=int, default=1000)
-    parser.add_argument('--split_train_test', action='store_true', default=False)
+    parser.add_argument('--split_train_test', action='store_true')
 
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--threads', default=8, type=int)
 
-    parser.add_argument('--batch_size', type=int)
-    parser.add_argument('--penalty', type=float)
-    parser.add_argument('--learning_rate', type=float)
-    parser.add_argument('--scheduler_factor', type=float)
-
-    parser.add_argument('--latent_size', type=int)
-    parser.add_argument('--encode_block', choices=['residual', 'conv1d'])
-    parser.add_argument('--encode_conv_architecture', type=parse_int_list)
-    parser.add_argument('--encode_conv_dilations', type=parse_int_list)
-    parser.add_argument('--encode_fc_architecture', type=parse_int_list)
-    parser.add_argument('--encode_time_architecture', type=parse_int_list)
-    parser.add_argument('--encode_latent_prepool_architecture', type=parse_int_list)
-    parser.add_argument('--encode_latent_postpool_architecture', type=parse_int_list)
-    parser.add_argument('--decode_architecture', type=parse_int_list)
-
+    # Parse the arguments
     args = vars(parser.parse_args())
 
     # Name of the dataset
-    model_name = args.pop('model')
+    model_name = args['model']
 
     # Figure out if we have already trained a model with this name.
-    path = f'./models/{model_name}.pt'
-    overwrite = args.pop('overwrite')
+    path = parsnip.ParsnipModel.get_model_path(model_name)
     if os.path.exists(path):
-        if overwrite:
+        if args['overwrite']:
             print(f"Model {model_name} already exists, overwriting!")
         else:
             print(f"Model {model_name} already exists, skipping!")
             sys.exit()
 
-    # Figure out which dataset to use
-    dataset_name = args.pop('dataset')
-    dataset, bands = parsnip.load_dataset(dataset_name)
-
-    # Set the number of threads to 1 if running on the GPU, or a larger number if
-    # running on CPU.
-    device = args.pop('device')
-    threads = args.pop('threads')
-    if device == 'cpu':
-        torch.set_num_threads(threads)
-    else:
-        torch.set_num_threads(1)
-
-    # Figure out if we are training with a train/test split
-    use_train_test = args.pop('split_train_test')
-
-    # Maximum number of epochs to train for
-    max_epochs = args.pop('max_epochs')
+    # Load the dataset(s).
+    dataset = parsnip.load_datasets(args['dataset'])
 
     model = parsnip.ParsnipModel(
         model_name,
-        bands,
-        device=device,
-        **args
+        dataset.get_bands(),
+        device=args['device'],
+        threads=args['threads'],
+        augment=args['augment'],
+        settings=args,
+        ignore_unknown_settings=True
     )
 
     model.preprocess(dataset)
 
-    if use_train_test:
+    if args['split_train_test']:
         train_dataset, test_dataset = parsnip.split_train_test(dataset)
-        model.fit(train_dataset, test_dataset=test_dataset, max_epochs=max_epochs)
+        model.fit(train_dataset, test_dataset=test_dataset,
+                  max_epochs=args['max_epochs'])
     else:
         train_dataset = dataset
-        model.fit(train_dataset, max_epochs=max_epochs)
+        model.fit(train_dataset, max_epochs=args['max_epochs'])
 
     # Save the score to a file for quick comparisons. If we have a small dataset,
     # repeat the dataset several times when calculating the score.
     rounds = int(np.ceil(25000 / len(train_dataset.objects)))
 
     train_score = model.score(train_dataset, rounds=rounds)
-    if use_train_test:
+    if args['use_train_test']:
         test_score = model.score(test_dataset, rounds=10 * rounds)
     else:
         test_score = -1.
@@ -108,6 +75,6 @@ if __name__ == '__main__':
     # Time taken in minutes
     elapsed_time = (end_time - start_time) / 60.
 
-    with open('./parsnip_results.txt', 'a') as f:
+    with open('./parsnip_results.log', 'a') as f:
         print(f'{model_name} {model.epoch} {elapsed_time:.2f} {train_score:.4f} '
               f'{test_score:.4f}', file=f)

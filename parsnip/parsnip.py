@@ -121,11 +121,12 @@ class GlobalMaxPoolingTime(nn.Module):
 
 class ParsnipModel(nn.Module):
     def __init__(self, name, bands, device='cpu', threads=8, augment=False,
-                 settings={}):
+                 settings={}, ignore_unknown_settings=False):
         super().__init__()
 
         # Parse settings
-        self.settings = parse_settings(name, bands, settings)
+        self.settings = parse_settings(name, bands, settings,
+                                       ignore_unknown_settings=ignore_unknown_settings)
 
         self.name = name
         self.augment = augment
@@ -133,6 +134,7 @@ class ParsnipModel(nn.Module):
 
         # Setup the device
         self.device = self._parse_device(device)
+        torch.set_num_threads(self.threads)
 
         # Setup the bands
         self._setup_band_weights()
@@ -187,13 +189,6 @@ class ParsnipModel(nn.Module):
 
         self.device = new_device
 
-        # Set the number of threads to 1 if running on the GPU, or a larger number if
-        # running on CPU.
-        if self.device == 'cpu':
-            torch.set_num_threads(self.threads)
-        else:
-            torch.set_num_threads(1)
-
         # Send all of the weights
         super().to(self.device)
 
@@ -206,12 +201,12 @@ class ParsnipModel(nn.Module):
         self.band_interpolate_weights = self.band_interpolate_weights.to(self.device)
 
     @classmethod
-    def _get_model_path(cls, name):
+    def get_model_path(cls, name):
         return f'./models/{name}.pt'
 
     @property
     def model_path(self):
-        return self._get_model_path(self.settings['name'])
+        return self.get_model_path(self.settings['name'])
 
     def save(self):
         """Save the model"""
@@ -224,7 +219,7 @@ class ParsnipModel(nn.Module):
         """Load a model"""
 
         # Load the model data
-        path = cls._get_model_path(name)
+        path = cls.get_model_path(name)
         use_device = cls._parse_device(device)
         settings, state_dict = torch.load(path, use_device)
 
@@ -355,9 +350,9 @@ class ParsnipModel(nn.Module):
         print(f"parsnip photometry:     {parsnip_photometry}")
         print(f"ratio:                  {parsnip_photometry / sncosmo_photometry}")
 
-    def preprocess(self, dataset, threads=8, chunksize=64, verbose=True):
+    def preprocess(self, dataset, chunksize=64, verbose=True):
         """Preprocess a dataset"""
-        if threads == 1:
+        if self.threads == 1:
             iterator = dataset.objects
             if verbose:
                 iterator = tqdm(dataset.objects, file=sys.stdout)
@@ -370,7 +365,7 @@ class ParsnipModel(nn.Module):
             func = functools.partial(preprocess_astronomical_object,
                                      settings=self.settings)
 
-            with multiprocessing.Pool(threads) as p:
+            with multiprocessing.Pool(self.threads) as p:
                 iterator = p.imap(func, dataset.objects, chunksize=chunksize)
                 if verbose:
                     iterator = tqdm(iterator, total=len(dataset.objects),
@@ -734,17 +729,20 @@ class ParsnipModel(nn.Module):
         sample_encoding = self.reparameterize(encoding_mu, encoding_logvar,
                                               sample=sample)
 
+        time_sigma = self.settings['time_sigma']
+        color_sigma = self.settings['color_sigma']
+
         # Rescale variables
-        ref_times = sample_encoding[:, 0] * self.settings['time_sigma']
-        color = sample_encoding[:, 1] * self.settings['color_sigma']
+        ref_times = sample_encoding[:, 0] * time_sigma
+        color = sample_encoding[:, 1] * color_sigma
         encoding = sample_encoding[:, 2:]
 
         # Constrain the color and reference time so that things don't go to crazy values
         # and throw everything off with floating point precision errors. This will not
         # be a concern for a properly trained model, but things can go wrong early in
         # the training at high learning rates.
-        color = torch.clamp(color / self.settings['time_sigma'], -10., 10.)
-        ref_times = torch.clamp(ref_times / self.settings['time_sigma'], -10., 10.)
+        ref_times = torch.clamp(ref_times, -10. * time_sigma, 10. * time_sigma)
+        color = torch.clamp(color, -10. * color_sigma, 10. * color_sigma)
 
         return ref_times, color, encoding
 

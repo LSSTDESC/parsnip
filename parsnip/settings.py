@@ -1,3 +1,4 @@
+import argparse
 import extinction
 import numpy as np
 import sncosmo
@@ -35,6 +36,7 @@ default_settings = {
     'decode_architecture': [40, 80, 160],
 
     # Settings that will be filled later.
+    'derived_settings_calculated': None,
     'name': None,
     'bands': None,
     'band_mw_extinctions': None,
@@ -135,12 +137,16 @@ def update_derived_settings(settings):
     # Figure out if we want to do background correction for each band.
     settings['band_correct_background'] = should_correct_background(settings['bands'])
 
+    # Flag that the derived settings have been calculated so that we don't redo it when
+    # loading a model from disk.
+    settings['derived_settings_calculated'] = True
+
     return settings
 
 
-def parse_settings(name, bands, settings={}):
+def parse_settings(name, bands, settings={}, ignore_unknown_settings=False):
     """Parse the settings for a ParSNIP model"""
-    if 'model_version' in settings:
+    if 'derived_settings_calculated' in settings:
         # We are loading a prebuilt-model, don't recalculate everything.
         prebuilt_model = True
     else:
@@ -152,10 +158,48 @@ def parse_settings(name, bands, settings={}):
 
     for key, value in settings.items():
         if key not in default_settings:
-            raise KeyError(f"Unknown setting '{key}' with value '{value}'.")
-        use_settings[key] = value
+            if ignore_unknown_settings:
+                continue
+            else:
+                raise KeyError(f"Unknown setting '{key}' with value '{value}'.")
+        else:
+            use_settings[key] = value
 
     if not prebuilt_model:
         use_settings = update_derived_settings(use_settings)
 
     return use_settings
+
+
+def parse_int_list(text):
+    result = [int(i) for i in text.split(',')]
+    return result
+
+
+def build_default_argparse(description):
+    """Build an argparse object that can handle all of the ParSNIP model settings.
+
+    The resulting parsed namespace can be passed to parse_settings to get a ParSNIP
+    settings object.
+    """
+    parser = argparse.ArgumentParser(description=description)
+
+    for key, value in default_settings.items():
+        if value is None:
+            # Derived setting, not something that should be specified.
+            continue
+
+        if isinstance(value, bool):
+            # Handle booleans.
+            if value:
+                parser.add_argument(f'--no_{key}', action='store_false', dest=key)
+            else:
+                parser.add_argument(f'--{key}', action='store_true', dest=key)
+        elif isinstance(value, list):
+            # Handle lists of integers
+            parser.add_argument(f'--{key}', type=parse_int_list, default=value)
+        else:
+            # Handle other object types
+            parser.add_argument(f'--{key}', type=type(value), default=value)
+
+    return parser

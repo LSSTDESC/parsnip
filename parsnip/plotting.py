@@ -176,6 +176,7 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
         'TDE': 'C7',
 
         'FELT': 'C5',
+        'Peculiar': 'C5',
     }
 
     if idx3 is not None:

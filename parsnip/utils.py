@@ -2,6 +2,7 @@ import avocado
 import sncosmo
 import numpy as np
 import os
+from functools import reduce
 
 
 def parse_panstarrs(dataset):
@@ -9,13 +10,9 @@ def parse_panstarrs(dataset):
     # Throw out light curves that don't have good redshifts or are otherwise bad.
     dataset = dataset[dataset.metadata['unsupervised']]
 
-    bands = ['ps1::g', 'ps1::r', 'ps1::i', 'ps1::z']
-    correct_background = True
-    correct_mw_extinction = True
-
     # Labels to use for classification
     label_map = {
-        '-': '-',           # Unknown object
+        '-': 'Unknown',            # Unknown object
         'FELT': 'FELT',
         'SLSN': 'SLSN',
         'SNII': 'SNII',
@@ -30,7 +27,12 @@ def parse_panstarrs(dataset):
     }
     dataset.metadata['label'] = [label_map[i] for i in dataset.metadata['type']]
 
-    return dataset, bands, correct_background, correct_mw_extinction
+    # Update the label on each object.
+    if dataset.objects is not None:
+        for obj, label in zip(dataset.objects, dataset.metadata['label']):
+            obj.metadata['label'] = label
+
+    return dataset
 
 
 def parse_ztf(dataset):
@@ -38,16 +40,114 @@ def parse_ztf(dataset):
     # Throw out light curves that don't have good redshifts.
     dataset = dataset[~dataset.metadata['redshift'].isnull()]
 
-    bands = ['ztfr', 'ztfg', 'ztfi', 'uvot::u', 'uvot::b', 'uvot::v',
-             'uvot::uvm2', 'uvot::uvw1', 'uvot::uvw2']
-    correct_background = False
-    correct_mw_extinction = False
+    # Throw out observations with zero flux.
+    if dataset.objects is not None:
+        new_objects = []
+        for obj in dataset.objects:
+            obs = obj.observations[obj.observations['flux'] != 0.]
+            new_objects.append(type(obj)(obj.metadata, obs))
+        dataset = avocado.Dataset.from_objects(dataset.name, new_objects)
 
-    # Labels to use for classification
-    # TODO clean this up
-    dataset.metadata['label'] = dataset.metadata['type']
+    # Clean up labels
+    types = [str(i).replace(' ', '').replace('?', '') for i in dataset.metadata['type']]
+    label_map = {
+        'AGN': 'Galaxy',
+        'Bogus': 'Bad',
+        'CLAGN': 'Galaxy',
+        'CV': 'Star',
+        'CVCandidate': 'Star',
+        'Duplicate': 'Bad',
+        'Galaxy': 'Galaxy',
+        'Gap': 'Peculiar',
+        'GapI': 'Peculiar',
+        'GapI-Ca-rich': 'Peculiar',
+        'IIP': 'SNII',
+        'ILRT': 'Peculiar',
+        'LBV': 'Star',
+        'LINER': 'Galaxy',
+        'LRN': 'Star',
+        'NLS1': 'Galaxy',
+        'None': 'Bad',
+        'Nova': 'Star',
+        'Q': 'Galaxy',
+        'QSO': 'Galaxy',
+        'SLSN-I': 'SLSN',
+        'SLSN-I.5': 'SLSN',
+        'SLSN-II': 'SLSN',
+        'SLSN-R': 'SLSN',
+        'SN': 'Unknown',
+        'SNII': 'SNII',
+        'SNII-pec': 'SNII',
+        'SNIIL': 'SNII',
+        'SNIIP': 'SNII',
+        'SNIIb': 'SNII',
+        'SNIIn': 'SNII',
+        'SNIa': 'SNIa',
+        'SNIa-91T': 'SNIa',
+        'SNIa-91T-like': 'SNIa',
+        'SNIa-91bg': 'SNIa',
+        'SNIa-99aa': 'SNIa',
+        'SNIa-CSM': 'SNIa',
+        'SNIa-norm': 'SNIa',
+        'SNIa-pec': 'SNIa',
+        'SNIa00cx-like': 'SNIa',
+        'SNIa02cx-like': 'SNIa',
+        'SNIa02ic-like': 'SNIa',
+        'SNIa91T': 'SNIa',
+        'SNIa91T-like': 'SNIa',
+        'SNIa91bg-like': 'SNIa',
+        'SNIapec': 'SNIa',
+        'SNIax': 'SNIa',
+        'SNIb': 'SNIbc',
+        'SNIb/c': 'SNIbc',
+        'SNIbn': 'SNIbc',
+        'SNIbpec': 'SNIbc',
+        'SNIc': 'SNIbc',
+        'SNIc-BL': 'SNIbc',
+        'SNIc-broad': 'SNIbc',
+        'Star': 'Star',
+        'TDE': 'TDE',
+        'Var': 'Star',
+        'asteroid': 'Asteroid',
+        'blazar': 'Galaxy',
+        'bogus': 'Bad',
+        'duplicate': 'Bad',
+        'galaxy': 'Galaxy',
+        'nan': 'Unknown',
+        'nova': 'Star',
+        'old': 'Bad',
+        'rock': 'Asteroid',
+        'star': 'Star',
+        'stellar': 'Star',
+        'unclassified': 'Unknown',
+        'unk': 'Unknown',
+        'unknown': 'Unknown',
+        'varstar': 'Star',
+    }
 
-    return dataset, bands, correct_background, correct_mw_extinction
+    dataset.metadata['label'] = [label_map[i] for i in types]
+
+    # Update the label on each object.
+    if dataset.objects is not None:
+        for obj, label in zip(dataset.objects, dataset.metadata['label']):
+            obj.metadata['label'] = label
+
+    # Drop light curves that aren't supernova-like
+    valid_classes = [
+        'SNIa',
+        'SNII',
+        'Unknown',
+        # 'Galaxy',
+        'SNIbc',
+        'SLSN',
+        # 'Star',
+        'TDE',
+        # 'Bad',
+        'Peculiar',
+    ]
+    dataset = dataset[dataset.metadata['label'].isin(valid_classes)]
+
+    return dataset
 
 
 def parse_plasticc(dataset):
@@ -92,36 +192,42 @@ def parse_plasticc(dataset):
     }
     dataset.metadata['label'] = [label_map[i] for i in dataset.metadata['class']]
 
-    bands = ['lsstu', 'lsstg', 'lsstr', 'lssti', 'lsstz', 'lssty']
-    correct_background = True
-    correct_mw_extinction = False
+    # Update the label on each object.
+    if dataset.objects is not None:
+        for obj, label in zip(dataset.objects, dataset.metadata['label']):
+            obj.metadata['label'] = label
 
-    return dataset, bands, correct_background, correct_mw_extinction
+    return dataset
 
 
 def load_dataset(name, *args, **kwargs):
     """Load a dataset using avocado.
 
     This can be any avocado dataset, but we do some additional preprocessing here to
-    get it in the format that is needed for parsnip. Specifically, we need to specify
-    the bands and their ordering for each dataset, and we need to specify whether to
-    apply background corrections and MW extinction corrections. We also cut out
-    observations that are not relevant for this model (e.g. galactic ones). We do
-    this in a naive way by looking at the first word in the dataset name and applying
-    the corresponding preprocessing function.
-
-    We also allow for the special dataset "plasticc_combo" that selects a subset of
-    the PLAsTiCC data from the training and validation sets.
+    clean things up for parsnip.  We also cut out observations that are not relevant
+    for this model (e.g.  galactic ones).  We do this in a naive way by looking at
+    the first word in the dataset name and applying the corresponding preprocessing
+    function.
     """
-    # TODO: Get rid of all of this and go back to the original Avocado method of
-    # loading datasets.
-    # - Need to handle loading multiple datasets in pieces. That could be done by
-    # parsing a string, e.g. plasticc_train,plasticc_test[0,100],plasticc_test[5,10]
-    # - Need to be able to detect invalid redshifts and throw them out (with a flag?)
-    # - Need to be able to detect invalid types of objects and throw them out (with a
-    # flag?)
-    # - Get rid of ParsnipObject altogether to make things easier. It isn't really
-    # necessary with my latest code.
+    # The name can contain chunk information in the format name,num_chunks,chunk.  For
+    # example, ps1,1,100 will load chunk #1 of 100 from the ps1 dataset.
+    dataset_info = name.split(',')
+    if len(dataset_info) == 1:
+        name = dataset_info[0]
+    elif len(dataset_info) == 3:
+        name, chunk, num_chunks = dataset_info
+        try:
+            chunk = int(chunk)
+            num_chunks = int(num_chunks)
+        except ValueError:
+            raise Exception(f"Invalid dataset string '{name}'")
+        kwargs['num_chunks'] = num_chunks
+        kwargs['chunk'] = chunk
+    else:
+        raise Exception(f"Invalid dataset string '{name}'")
+
+    # Load the dataset as is.
+    dataset = avocado.Dataset.load(name, *args, **kwargs)
 
     if name == 'plasticc_combo':
         # Load a subset of the PLAsTiCC dataset for training. We can't fit the whole
@@ -137,35 +243,36 @@ def load_dataset(name, *args, **kwargs):
             # WFD set, load 10% of it
             + avocado.load('plasticc_test', chunk=5, num_chunks=10)
         )
-    else:
-        # Load the dataset as is.
-        dataset = avocado.Dataset.load(name, *args, **kwargs)
 
     # Parse the dataset to figure out what we need to do with it.
-    dataset_type = name.split('_')[0]
-
-    if dataset_type in ['ps1', 'panstarrs']:
-        result = parse_panstarrs(dataset)
-    elif dataset_type == 'plasticc':
-        result = parse_plasticc(dataset)
-    elif dataset_type == 'ztf':
-        result = parse_ztf(dataset)
+    parse_name = name.lower()
+    if 'ps1' in parse_name or 'panstarrs' in parse_name:
+        print(f"Parsing PanSTARRS dataset '{name}'...")
+        dataset = parse_panstarrs(dataset)
+    elif 'plasticc' in parse_name:
+        print(f"Parsing PLAsTiCC dataset '{name}'...")
+        dataset = parse_plasticc(dataset)
+    elif 'ztf' in parse_name:
+        print(f"Parsing ZTF dataset '{name}'...")
+        dataset = parse_ztf(dataset)
     else:
-        raise Exception(f"Unknown dataset {name}. Specify how to handle it in utils.py")
+        print(f"Unknown dataset type '{name}'. Using default parsing. Specify how to "
+              "parse it in utils.py if necessary.")
 
-    dataset, bands, correct_background, correct_mw_extinction = result
+    return dataset
 
-    if dataset.objects is not None:
-        # Flag each object
-        for obj in dataset.objects:
-            obj.correct_background = correct_background
-            obj.correct_mw_extinction = correct_mw_extinction
 
-        # Update the label on each object.
-        for obj, label in zip(dataset.objects, dataset.metadata['label']):
-            obj.metadata['label'] = label
+def load_datasets(dataset_names):
+    """Load a list of datasets and merge them"""
+    # Load the dataset(s).
+    datasets = []
+    for dataset_name in dataset_names:
+        datasets.append(load_dataset(dataset_name))
 
-    return dataset, bands
+    # Add all of the datasets together
+    dataset = reduce(lambda i, j: i+j, datasets)
+
+    return dataset
 
 
 def split_train_test(dataset):
