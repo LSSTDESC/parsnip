@@ -2,7 +2,6 @@
 import os
 import sys
 import parsnip
-import torch
 import argparse
 import time
 import pandas as pd
@@ -19,8 +18,8 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Apply a parsnip model to a dataset',
                                      argument_default=argparse.SUPPRESS)
-    parser.add_argument('dataset')
     parser.add_argument('model')
+    parser.add_argument('dataset')
 
     parser.add_argument('--chunk_size', default=10000, type=int)
     parser.add_argument('--augments', default=0, type=int)
@@ -28,65 +27,32 @@ if __name__ == '__main__':
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--threads', default=8, type=int)
 
-    parser.add_argument('--batch_size', type=int)
-    parser.add_argument('--penalty', type=float)
-    parser.add_argument('--learning_rate', type=float)
-    parser.add_argument('--scheduler_factor', type=float)
-
-    parser.add_argument('--latent_size', type=int)
-    parser.add_argument('--encode_block', choices=['residual', 'conv1d'])
-    parser.add_argument('--encode_conv_architecture', type=parse_int_list)
-    parser.add_argument('--encode_conv_dilations', type=parse_int_list)
-    parser.add_argument('--encode_fc_architecture', type=parse_int_list)
-    parser.add_argument('--encode_time_architecture', type=parse_int_list)
-    parser.add_argument('--encode_latent_prepool_architecture', type=parse_int_list)
-    parser.add_argument('--encode_latent_postpool_architecture', type=parse_int_list)
-    parser.add_argument('--decode_architecture', type=parse_int_list)
-
     args = vars(parser.parse_args())
 
-    # Name of the dataset
-    model_name = args.pop('model')
-
-    # Figure out which dataset to use
-    dataset_name = args.pop('dataset')
+    # Load the model
+    model = parsnip.load_model(
+        args['model'],
+        device=args['device'],
+        threads=args['threads'],
+    )
 
     # Load the metadata for the dataset
-    meta_dataset, bands = parsnip.load_dataset(dataset_name, metadata_only=True)
-
-    # Set the number of threads to 1 if running on the GPU, or a larger number if
-    # running on CPU.
-    device = args.pop('device')
-    threads = args.pop('threads')
-    if device == 'cpu':
-        torch.set_num_threads(threads)
-    else:
-        torch.set_num_threads(1)
+    meta_dataset = parsnip.load_dataset(args['dataset'], metadata_only=True)
 
     # Parse the dataset in chunks. For large datasets, we can't fit them all in memory
     # at the same time.
-    chunk_size = args.pop('chunk_size')
+    chunk_size = args['chunk_size']
     num_chunks = len(meta_dataset) // chunk_size + 1
 
     # Optionally, the dataset can be augmented a given number of times.
-    augments = args.pop('augments')
-
-    # Load the model
-    model = parsnip.ParsnipModel(
-        model_name,
-        bands,
-        device=device,
-        augment=False,
-        **args
-    )
-    model.load()
+    augments = args['augments']
 
     predictions = []
 
     for chunk in tqdm(range(num_chunks), file=sys.stdout):
         # Load a chunk of the dataset
-        dataset, bands = parsnip.load_dataset(dataset_name, num_chunks=num_chunks,
-                                              chunk=chunk)
+        dataset = parsnip.load_dataset(args['dataset'], num_chunks=num_chunks,
+                                       chunk=chunk, verbose=False)
 
         # Preprocess the light curves
         model.preprocess(dataset, verbose=False)
@@ -103,9 +69,9 @@ if __name__ == '__main__':
     predictions = pd.concat(predictions)
     os.makedirs('./predictions', exist_ok=True)
     if augments > 0:
-        output_name = f'{dataset_name}_{model_name}_aug_{augments}'
+        output_name = f"{args['dataset']}_{args['model']}_aug_{augments}"
     else:
-        output_name = f'{dataset_name}_{model_name}'
+        output_name = f"{args['dataset']}_{args['model']}"
 
     predictions.to_hdf(f'./predictions/{output_name}.h5', 'predictions', 'w')
 

@@ -200,7 +200,7 @@ def parse_plasticc(dataset):
     return dataset
 
 
-def load_dataset(name, *args, **kwargs):
+def load_dataset(name, *args, verbose=True, **kwargs):
     """Load a dataset using avocado.
 
     This can be any avocado dataset, but we do some additional preprocessing here to
@@ -229,45 +229,34 @@ def load_dataset(name, *args, **kwargs):
     # Load the dataset as is.
     dataset = avocado.Dataset.load(name, *args, **kwargs)
 
-    if name == 'plasticc_combo':
-        # Load a subset of the PLAsTiCC dataset for training. We can't fit the whole
-        # dataset in memory at once, so we only use part of it for the unsupervised
-        # training.
-        dataset = (
-            # Training set
-            avocado.load('plasticc_train')
-
-            # DDF set
-            + avocado.load('plasticc_test', chunk=0, num_chunks=100)
-
-            # WFD set, load 10% of it
-            + avocado.load('plasticc_test', chunk=5, num_chunks=10)
-        )
-
     # Parse the dataset to figure out what we need to do with it.
     parse_name = name.lower()
     if 'ps1' in parse_name or 'panstarrs' in parse_name:
-        print(f"Parsing PanSTARRS dataset '{name}'...")
+        if verbose:
+            print(f"Parsing PanSTARRS dataset '{name}'...")
         dataset = parse_panstarrs(dataset)
     elif 'plasticc' in parse_name:
-        print(f"Parsing PLAsTiCC dataset '{name}'...")
+        if verbose:
+            print(f"Parsing PLAsTiCC dataset '{name}'...")
         dataset = parse_plasticc(dataset)
     elif 'ztf' in parse_name:
-        print(f"Parsing ZTF dataset '{name}'...")
+        if verbose:
+            print(f"Parsing ZTF dataset '{name}'...")
         dataset = parse_ztf(dataset)
     else:
-        print(f"Unknown dataset type '{name}'. Using default parsing. Specify how to "
-              "parse it in utils.py if necessary.")
+        if verbose:
+            print(f"Unknown dataset type '{name}'. Using default parsing. Specify "
+                  "how to parse it in utils.py if necessary.")
 
     return dataset
 
 
-def load_datasets(dataset_names):
+def load_datasets(dataset_names, verbose=True):
     """Load a list of datasets and merge them"""
     # Load the dataset(s).
     datasets = []
     for dataset_name in dataset_names:
-        datasets.append(load_dataset(dataset_name))
+        datasets.append(load_dataset(dataset_name, verbose=verbose))
 
     # Add all of the datasets together
     dataset = reduce(lambda i, j: i+j, datasets)
