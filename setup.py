@@ -4,7 +4,7 @@ from setuptools import setup
 setup(
     name='parsnip',
     version='0.1',
-    description='Parsnip: Empirical Generative Models of Astronomical Transients',
+    description='ParSNIP: Empirical Generative Models of Astronomical Transients',
     url='http://github.com/kboone/parsnip',
     author='Kyle Boone',
     author_email='kyboone@uw.edu',
