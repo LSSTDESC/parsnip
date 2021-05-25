@@ -156,7 +156,8 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
 
 
 def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx3=None,
-                        max_count=1000, legend_ncol=1):
+                        max_count=1000, show_legend=True, legend_ncol=1, marker=None,
+                        markersize=5, ax=None):
     """Plot a representation"""
     color_map = {
         'SNIa': 'C0',
@@ -180,6 +181,9 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
     }
 
     if idx3 is not None:
+        if ax is not None:
+            raise Exception("Can't make 3D plot with prespecified axis.")
+
         fig = plt.figure(figsize=(8, 8), constrained_layout=True)
 
         gs = GridSpec(2, 2, figure=fig)
@@ -196,7 +200,8 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
             (idx3, idx2, ax32),
         ]
     else:
-        fig, ax = plt.subplots(figsize=(6, 6), constrained_layout=True)
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(6, 6), constrained_layout=True)
 
         plot_vals = [
             (idx1, idx2, ax)
@@ -224,7 +229,8 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
                 yerr=type_predictions[f's{yidx}_error'][:max_count],
                 label=type_name,
                 fmt='o',
-                markersize=5,
+                marker=marker,
+                markersize=markersize,
                 c=color,
             )
 
@@ -238,11 +244,13 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
         ax32.set_xlabel(f'$s_{idx3}$')
         ax32.tick_params(labelleft=False)
 
-        handles, labels = ax12.get_legend_handles_labels()
-        legend_ax.legend(handles=handles, labels=labels, loc='center',
-                         ncol=legend_ncol)
+        if show_legend:
+            handles, labels = ax12.get_legend_handles_labels()
+            legend_ax.legend(handles=handles, labels=labels, loc='center',
+                             ncol=legend_ncol)
     else:
         ax.set_xlabel(f'$s_{idx1}$')
         ax.set_ylabel(f'$s_{idx2}$')
 
-        ax.legend(ncol=legend_ncol)
+        if show_legend:
+            ax.legend(ncol=legend_ncol)
