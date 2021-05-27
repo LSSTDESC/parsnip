@@ -1,18 +1,18 @@
-import avocado
 import sncosmo
 import numpy as np
 import os
 from functools import reduce
+import lcdata
 
 
-def parse_panstarrs(dataset):
-    """Parse a PanSTARRS dataset"""
+def parse_ps1(dataset):
+    """Parse a PanSTARRS-1 dataset"""
     # Throw out light curves that don't have good redshifts or are otherwise bad.
-    dataset = dataset[dataset.metadata['unsupervised']]
+    dataset = dataset[dataset.meta['unsupervised']]
 
     # Labels to use for classification
     label_map = {
-        '-': 'Unknown',            # Unknown object
+        'Unknown': 'Unknown',
         'FELT': 'FELT',
         'SLSN': 'SLSN',
         'SNII': 'SNII',
@@ -25,12 +25,7 @@ def parse_panstarrs(dataset):
         'SNIbc (Ic-BL)': 'SNIbc',
         'SNIbn': 'SNIbc',
     }
-    dataset.metadata['label'] = [label_map[i] for i in dataset.metadata['type']]
-
-    # Update the label on each object.
-    if dataset.objects is not None:
-        for obj, label in zip(dataset.objects, dataset.metadata['label']):
-            obj.metadata['label'] = label
+    dataset.meta['type'] = [label_map[i] for i in dataset.meta['type']]
 
     return dataset
 
@@ -38,18 +33,20 @@ def parse_panstarrs(dataset):
 def parse_ztf(dataset):
     """Parse a ZTF dataset"""
     # Throw out light curves that don't have good redshifts.
-    dataset = dataset[~dataset.metadata['redshift'].isnull()]
+    dataset = dataset[~dataset.meta['redshift'].isnull()]
 
     # Throw out observations with zero flux.
-    if dataset.objects is not None:
-        new_objects = []
-        for obj in dataset.objects:
-            obs = obj.observations[obj.observations['flux'] != 0.]
-            new_objects.append(type(obj)(obj.metadata, obs))
-        dataset = avocado.Dataset.from_objects(dataset.name, new_objects)
+    # TODO: Update this.
+    raise Exception("Can't handle zero flux observations!")
+    # if dataset.objects is not None:
+        # new_objects = []
+        # for obj in dataset.objects:
+            # obs = obj.observations[obj.observations['flux'] != 0.]
+            # new_objects.append(type(obj)(obj.meta, obs))
+        # dataset = avocado.Dataset.from_objects(dataset.name, new_objects)
 
     # Clean up labels
-    types = [str(i).replace(' ', '').replace('?', '') for i in dataset.metadata['type']]
+    types = [str(i).replace(' ', '').replace('?', '') for i in dataset.meta['type']]
     label_map = {
         'AGN': 'Galaxy',
         'Bogus': 'Bad',
@@ -125,12 +122,12 @@ def parse_ztf(dataset):
         'varstar': 'Star',
     }
 
-    dataset.metadata['label'] = [label_map[i] for i in types]
+    dataset.meta['label'] = [label_map[i] for i in types]
 
     # Update the label on each object.
     if dataset.objects is not None:
-        for obj, label in zip(dataset.objects, dataset.metadata['label']):
-            obj.metadata['label'] = label
+        for obj, label in zip(dataset.objects, dataset.meta['label']):
+            obj.meta['label'] = label
 
     # Drop light curves that aren't supernova-like
     valid_classes = [
@@ -145,7 +142,7 @@ def parse_ztf(dataset):
         # 'Bad',
         'Peculiar',
     ]
-    dataset = dataset[dataset.metadata['label'].isin(valid_classes)]
+    dataset = dataset[dataset.meta['label'].isin(valid_classes)]
 
     return dataset
 
@@ -154,99 +151,91 @@ def parse_plasticc(dataset):
     """Parse a PLAsTiCC dataset"""
     # Throw out light curves that don't look like supernovae
     valid_classes = [
-        90,     # Ia
-        67,     # Ia-91bg
-        52,     # Iax
-        42,     # II
-        62,     # Ibc
-        95,     # SLSN
-        15,     # TDE
-        64,     # KN
-        # 88,    # AGN
-        # 92,    # RR Lyrae
-        # 65,    # M-dwarf stellar flare
-        # 16,    # Eclipsing binary
-        # 53,    # Mira variable
-        # 6,     # Microlens
-        # 991,   # binary microlens
-        992,    # Intermediate luminosity optical transient
-        993,    # Calcium rich transient
-        994,    # Pair instability SN
+        'SNIa',
+        'SNIa-91bg',
+        'SNIax',
+        'SNII',
+        'SNIbc',
+        'SLSN-I',
+        'TDE',
+        'KN',
+        'ILOT',
+        'CaRT',
+        'PISN',
+        # 'AGN',
+        # 'RRL',
+        # 'M-dwarf',
+        # 'EB',
+        # 'Mira',
+        # 'muLens-Single',
+        # 'muLens-Binary',
+        # 'muLens-String',
     ]
 
-    dataset = dataset[dataset.metadata['class'].isin(valid_classes)]
-
-    # Labels to use for classification
-    label_map = {
-        90: 'SNIa',
-        67: 'SNIa-91bg',
-        52: 'SNIax',
-        42: 'SNII',
-        62: 'SNIbc',
-        95: 'SLSN',
-        15: 'TDE',
-        64: 'KN',
-        992: 'ILOT',
-        993: 'CaRT',
-        994: 'PISN',
-    }
-    dataset.metadata['label'] = [label_map[i] for i in dataset.metadata['class']]
-
-    # Update the label on each object.
-    if dataset.objects is not None:
-        for obj, label in zip(dataset.objects, dataset.metadata['label']):
-            obj.metadata['label'] = label
+    dataset = dataset[np.isin(dataset.meta['type'], valid_classes)]
 
     return dataset
 
 
-def load_dataset(name, *args, verbose=True, **kwargs):
-    """Load a dataset using avocado.
+def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
+    """Parse a dataset from the lcdata package.
 
-    This can be any avocado dataset, but we do some additional preprocessing here to
-    clean things up for parsnip.  We also cut out observations that are not relevant
-    for this model (e.g.  galactic ones).  We do this in a naive way by looking at
-    the first word in the dataset name and applying the corresponding preprocessing
-    function.
+    We cut out observations that are not relevant for this model (e.g. galactic ones),
+    and update the class labels.
+
+    We try to guess the kind of dataset from the filename. If this doesn't work, specify
+    the kind explicitly instead.
     """
-    # The name can contain chunk information in the format name,num_chunks,chunk.  For
-    # example, ps1,1,100 will load chunk #1 of 100 from the ps1 dataset.
-    dataset_info = name.split(',')
-    if len(dataset_info) == 1:
-        name = dataset_info[0]
-    elif len(dataset_info) == 3:
-        name, chunk, num_chunks = dataset_info
-        try:
-            chunk = int(chunk)
-            num_chunks = int(num_chunks)
-        except ValueError:
-            raise Exception(f"Invalid dataset string '{name}'")
-        kwargs['num_chunks'] = num_chunks
-        kwargs['chunk'] = chunk
-    else:
-        raise Exception(f"Invalid dataset string '{name}'")
+    if kind is None and path_or_name is not None:
+        # Parse the dataset to figure out what we need to do with it.
+        parse_name = path_or_name.lower().split('/')[-1]
+        if 'ps1' in parse_name or 'panstarrs' in parse_name:
+            if verbose:
+                print(f"Parsing '{parse_name}' as PanSTARRS dataset ...")
+            kind = 'ps1'
+        elif 'plasticc' in parse_name:
+            if verbose:
+                print(f"Parsing '{parse_name}' as PLAsTiCC dataset...")
+            kind = 'plasticc'
+        elif 'ztf' in parse_name:
+            if verbose:
+                print(f"Parsing '{parse_name}' as ZTF dataset...")
+            kind = 'ztf'
+        else:
+            if verbose:
+                print(f"Unknown dataset type '{parse_name}'. Using default parsing. "
+                      "Specify how to parse it in utils.py if necessary.")
+            kind = 'default'
 
-    # Load the dataset as is.
-    dataset = avocado.Dataset.load(name, *args, **kwargs)
-
-    # Parse the dataset to figure out what we need to do with it.
-    parse_name = name.lower()
-    if 'ps1' in parse_name or 'panstarrs' in parse_name:
-        if verbose:
-            print(f"Parsing PanSTARRS dataset '{name}'...")
-        dataset = parse_panstarrs(dataset)
-    elif 'plasticc' in parse_name:
-        if verbose:
-            print(f"Parsing PLAsTiCC dataset '{name}'...")
+    if kind == 'ps1':
+        dataset = parse_ps1(dataset)
+    elif kind == 'plasticc':
         dataset = parse_plasticc(dataset)
-    elif 'ztf' in parse_name:
-        if verbose:
-            print(f"Parsing ZTF dataset '{name}'...")
+    elif kind == 'ztf':
         dataset = parse_ztf(dataset)
+    elif kind == 'default':
+        # Don't do anything by default
+        pass
     else:
         if verbose:
-            print(f"Unknown dataset type '{name}'. Using default parsing. Specify "
-                  "how to parse it in utils.py if necessary.")
+            print(f"Unknown dataset type '{kind}'. Using default parsing. "
+                  "Specify how to parse it in utils.py if necessary.")
+
+    return dataset
+
+
+def load_dataset(path, kind=None, in_memory=True, verbose=True):
+    """Load a dataset using the lcdata package.
+
+    This can be any lcdata HDF5 dataset. We use `parse_dataset` to clean things up for
+    ParSNIP by rejecting irrelevant light curves (e.g. galactic ones) and updating class
+    labels.
+
+    We try to guess the dataset type from the filename. If this doesn't work, specify
+    the filename explicitly instead.
+    """
+    dataset = lcdata.read_hdf5(path, in_memory=in_memory)
+    dataset = parse_dataset(dataset, path, kind=kind, verbose=verbose)
 
     return dataset
 

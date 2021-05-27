@@ -15,7 +15,7 @@ import torch.utils.data
 from torch import nn, optim
 from torch.nn import functional as F
 
-from .astronomical_object import preprocess_astronomical_object
+from .light_curve import preprocess_light_curve
 from .utils import frac_to_mag
 from .settings import parse_settings
 

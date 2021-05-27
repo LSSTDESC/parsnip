@@ -1,4 +1,4 @@
-from .astronomical_object import *
+from .light_curve import *
 from .parsnip import *
 from .utils import *
 from .plotting import *

@@ -6,13 +6,13 @@ import numpy as np
 import avocado
 
 
-def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
+def plot_light_curve(model, light_curve, count=100, show_model=True, show_bands=True,
                      show_missing_bandpasses=False, percentile=68, ax=None, **kwargs):
     if ax is None:
         fig, ax = plt.subplots(figsize=(5, 4), constrained_layout=True)
 
     model_times, model_flux, data, model_result = model.predict_light_curve(
-        obj, count, **kwargs
+        light_curve, count, **kwargs
     )
 
     input_data, compare_data, redshifts, band_indices, amp_scales = data
@@ -82,13 +82,13 @@ def plot_light_curve(model, obj, count=100, show_model=True, show_bands=True,
     return ref_time
 
 
-def plot_spectrum(model, obj, time, count=100, show_bands=True, percentile=68,
+def plot_spectrum(model, light_curve, time, count=100, show_bands=True, percentile=68,
                   ax=None, c=None, label=None):
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
 
     model_wave = model.model_wave
-    model_spectra = model.predict_spectrum(obj, time, count)
+    model_spectra = model.predict_spectrum(light_curve, time, count)
 
     if count == 0:
         # Single prediction
