@@ -37,7 +37,6 @@ default_settings = {
 
     # Settings that will be filled later.
     'derived_settings_calculated': None,
-    'name': None,
     'bands': None,
     'band_mw_extinctions': None,
     'band_correct_background': None,
@@ -144,7 +143,7 @@ def update_derived_settings(settings):
     return settings
 
 
-def parse_settings(name, bands, settings={}, ignore_unknown_settings=False):
+def parse_settings(bands, settings={}, ignore_unknown_settings=False):
     """Parse the settings for a ParSNIP model"""
     if 'derived_settings_calculated' in settings:
         # We are loading a prebuilt-model, don't recalculate everything.
@@ -153,7 +152,6 @@ def parse_settings(name, bands, settings={}, ignore_unknown_settings=False):
         prebuilt_model = False
 
     use_settings = default_settings.copy()
-    use_settings['name'] = name
     use_settings['bands'] = bands
 
     for key, value in settings.items():

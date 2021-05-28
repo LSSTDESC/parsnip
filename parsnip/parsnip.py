@@ -7,8 +7,10 @@ import pandas as pd
 import sys
 
 from astropy.cosmology import Planck18
+import astropy.table
 import extinction
 import sncosmo
+import lcdata
 
 import torch
 import torch.utils.data
@@ -27,16 +29,18 @@ class ParsnipDataLoader():
         self.shuffle = shuffle
 
         if self.shuffle:
-            self._ordered_objects = np.random.permutation(self.dataset.objects)
+            self._ordered_light_curves = np.random.permutation(
+                self.dataset.light_curves
+            )
         else:
-            self._ordered_objects = self.dataset.objects
+            self._ordered_light_curves = self.dataset.light_curves
 
     def __len__(self):
-        return len(self.dataset.objects)
+        return len(self.dataset.light_curves)
 
     def __getitem__(self, index):
-        objects = self._ordered_objects[index]
-        return self.model.get_data(objects)
+        light_curves = self._ordered_light_curves[index]
+        return self.model.get_data(light_curves)
 
     def __iter__(self):
         """Setup iteration over batches"""
@@ -120,15 +124,15 @@ class GlobalMaxPoolingTime(nn.Module):
 
 
 class ParsnipModel(nn.Module):
-    def __init__(self, name, bands, device='cpu', threads=8, augment=False,
+    def __init__(self, path, bands, device='cpu', threads=8, augment=False,
                  settings={}, ignore_unknown_settings=False):
         super().__init__()
 
         # Parse settings
-        self.settings = parse_settings(name, bands, settings,
+        self.settings = parse_settings(bands, settings,
                                        ignore_unknown_settings=ignore_unknown_settings)
 
-        self.name = name
+        self.path = path
         self.augment = augment
         self.threads = threads
 
@@ -200,31 +204,21 @@ class ParsnipModel(nn.Module):
             self.band_interpolate_locations.to(self.device)
         self.band_interpolate_weights = self.band_interpolate_weights.to(self.device)
 
-    @classmethod
-    def get_model_path(cls, name):
-        return f'./models/{name}.pt'
-
-    @property
-    def model_path(self):
-        return self.get_model_path(self.settings['name'])
-
     def save(self):
         """Save the model"""
-        path = self.model_path
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save([self.settings, self.state_dict()], path)
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        torch.save([self.settings, self.state_dict()], self.path)
 
     @classmethod
-    def load(cls, name, device='cpu', threads=8, augment=False):
+    def load(cls, path, device='cpu', threads=8, augment=False):
         """Load a model"""
 
         # Load the model data
-        path = cls.get_model_path(name)
         use_device = cls._parse_device(device)
         settings, state_dict = torch.load(path, use_device)
 
         # Instantiate the model
-        model = cls(name, settings['bands'], use_device, threads, augment, settings)
+        model = cls(path, settings['bands'], use_device, threads, augment, settings)
         model.load_state_dict(state_dict)
 
         return model
@@ -353,49 +347,48 @@ class ParsnipModel(nn.Module):
     def preprocess(self, dataset, chunksize=64, verbose=True):
         """Preprocess a dataset"""
         if self.threads == 1:
-            iterator = dataset.objects
+            iterator = dataset.light_curves
             if verbose:
-                iterator = tqdm(dataset.objects, file=sys.stdout)
+                iterator = tqdm(dataset.light_curves, file=sys.stdout)
 
             # Run on a single core without multiprocessing
-            for obj in iterator:
-                preprocess_astronomical_object(obj)
+            preprocessed_light_curves = [preprocess_light_curve(lc, self.settings) for
+                                         lc in iterator]
         else:
             # Run with multiprocessing in multiple threads.
-            func = functools.partial(preprocess_astronomical_object,
-                                     settings=self.settings)
+            func = functools.partial(preprocess_light_curve, settings=self.settings)
 
             with multiprocessing.Pool(self.threads) as p:
-                iterator = p.imap(func, dataset.objects, chunksize=chunksize)
+                iterator = p.imap(func, dataset.light_curves, chunksize=chunksize)
                 if verbose:
-                    iterator = tqdm(iterator, total=len(dataset.objects),
+                    iterator = tqdm(iterator, total=len(dataset.light_curves),
                                     file=sys.stdout)
-                data = list(iterator)
+                preprocessed_light_curves = list(iterator)
 
-            # The outputs don't get saved since the objects are in a different thread.
-            # Save them manually.
-            for obj, obj_data in zip(dataset.objects, data):
-                obj.preprocess_data = obj_data
+        # Make a new dataset
+        preprocessed_dataset = lcdata.from_light_curves(preprocessed_light_curves)
 
-    def get_data(self, objects):
-        """Extract the data from an object or set of objects needed for ParSNIP."""
-        # Check if we have a list of objects or a single one and handle it
+        return preprocessed_dataset
+
+    def get_data(self, light_curves):
+        """Extract data needed by ParSNIP from a light curve or set of light curves."""
+        # Check if we have a list of light curves or a single one and handle it
         # appropriately.
-        try:
-            iter(objects)
-            single = False
-        except TypeError:
+        if isinstance(light_curves, astropy.table.Table):
+            # Single object. Wrap it so that we can process it as an array. We'll unwrap
+            # it at the end.
             single = True
-            objects = [objects]
+            light_curves = [light_curves]
+        else:
+            single = False
 
         input_data = []
         compare_data = []
         redshifts = []
 
-        # Extract the data from each object. Numpy is much faster than torch for
+        # Extract the data from each light curve. Numpy is much faster than torch for
         # vector operations currently, so do as much as we can in numpy before
         # converting to torch tensors.
-
         fluxes = []
         flux_errors = []
         band_indices = []
@@ -408,11 +401,9 @@ class ParsnipModel(nn.Module):
         redshifts = []
         amp_scales = []
 
-        for idx, obj in enumerate(objects):
-            data = obj.preprocess_data
-
+        for idx, lc in enumerate(light_curves):
             # Extract the redshift.
-            redshifts.append(obj.metadata['redshift'])
+            redshifts.append(lc.meta['redshift'])
 
             if self.augment:
                 time_shift = np.round(
@@ -426,14 +417,14 @@ class ParsnipModel(nn.Module):
             amp_scales.append(amp_scale)
 
             # Shift and scale the grid data
-            obj_times = data['time'] + time_shift
-            obj_flux = data['flux'] * amp_scale
-            obj_flux_error = data['flux_error'] * amp_scale
-            obj_band_indices = data['band_indices']
-            obj_time_indices = data['time_indices'] + time_shift
+            obj_times = lc['time'] + time_shift
+            obj_flux = lc['flux'] * amp_scale
+            obj_flux_error = lc['fluxerr'] * amp_scale
+            obj_band_indices = lc['band_index']
+            obj_time_indices = lc['time_index'] + time_shift
             obj_batch_indices = np.ones_like(obj_band_indices) * idx
 
-            # Mask out data that is outside of the window of the input.
+            # Mask out observations that is outside of the window of the input.
             mask = (obj_time_indices >= 0) & (obj_time_indices <
                                               self.settings['time_window'])
 
@@ -499,7 +490,7 @@ class ParsnipModel(nn.Module):
         amp_scales = np.array(amp_scales)
 
         # Build a grid for the input
-        grid_flux = np.zeros((len(objects), len(self.settings['bands']),
+        grid_flux = np.zeros((len(light_curves), len(self.settings['bands']),
                               self.settings['time_window']))
         grid_weights = np.zeros_like(grid_flux)
 
@@ -884,7 +875,7 @@ class ParsnipModel(nn.Module):
         # The model is stochastic, so the loss function will have a fair bit of noise.
         # If the dataset is small, we run through several augmentations of it every
         # epoch to get the noise down.
-        repeats = int(np.ceil(25000 / len(dataset.objects)))
+        repeats = int(np.ceil(25000 / len(dataset)))
 
         while self.epoch < max_epochs:
             loader = ParsnipDataLoader(dataset, self, shuffle=True)
@@ -1029,7 +1020,7 @@ class ParsnipModel(nn.Module):
         predictions = pd.concat(predictions, ignore_index=True)
 
         # Add in the preprocessed scale for the amplitude
-        scales = np.array([i.preprocess_data['scale'] for i in dataset.objects])
+        scales = np.array([i.preprocess_data['scale'] for i in dataset.light_curves])
         predictions['amplitude'] *= scales
         predictions['amplitude_error'] *= scales
 
@@ -1079,7 +1070,7 @@ class ParsnipModel(nn.Module):
         Returns
         -------
         predictions : `pandas.DataFrame`
-            Dataframe with one row for each object and columns with each of the
+            Dataframe with one row for each light curve and columns with each of the
             predicted values.
         """
         # Keep track of whether augmentation was turned on so that we can revert to the
@@ -1162,7 +1153,7 @@ class ParsnipModel(nn.Module):
 
         return model_flux, model_spectra, data, cpu_result
 
-    def predict_light_curve(self, obj, count=0, sampling=1., pad=0.):
+    def predict_light_curve(self, light_curve, count=0, sampling=1., pad=0.):
         # Figure out where to sample the light curve
         min_time = -self.settings['time_window'] / 2. - pad
         max_time = self.settings['time_window'] / 2. + pad
@@ -1174,7 +1165,7 @@ class ParsnipModel(nn.Module):
         pred_bands = np.repeat(band_indices, len(model_times))
 
         model_flux, model_spectra, data, model_result = self._predict_single(
-            obj, pred_times, pred_bands, count)
+            light_curve, pred_times, pred_bands, count)
 
         # Reshape model_flux so that it has the shape (batch, band, time)
         model_flux = model_flux.reshape((-1, len(band_indices), len(model_times)))
@@ -1185,13 +1176,13 @@ class ParsnipModel(nn.Module):
 
         return model_times, model_flux, data, model_result
 
-    def predict_spectrum(self, obj, time, count=0):
+    def predict_spectrum(self, light_curve, time, count=0):
         """Predict the spectrum of an object at a given time"""
         pred_times = [time]
         pred_bands = [0]
 
         model_flux, model_spectra, data, model_result = self._predict_single(
-            obj, pred_times, pred_bands, count
+            light_curve, pred_times, pred_bands, count
         )
 
         return model_spectra[..., 0]

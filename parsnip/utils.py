@@ -1,7 +1,7 @@
 import sncosmo
 import numpy as np
 import os
-from functools import reduce
+from functools import reduce, lru_cache
 import lcdata
 
 
@@ -312,3 +312,45 @@ def frac_to_mag(fractional_difference):
     mag_diff = (pos_mag - neg_mag) / 2.0
 
     return mag_diff
+
+
+@lru_cache(maxsize=None)
+def get_band_effective_wavelength(band):
+    """Calculate the effective wavelength of a band
+
+    The results of this calculation are cached, and the effective wavelength will only
+    be calculated once for each band.
+
+    Parameters
+    ----------
+    band : str
+        Name of a band in the `sncosmo` band registry
+
+    Returns
+    -------
+    effective_wavelength
+        Effective wavelength of the band.
+    """
+    return sncosmo.get_bandpass(band).wave_eff
+
+
+def get_bands(dataset):
+    """Retrieve a list of bands in a dataset
+
+    Parameters
+    ----------
+    dataset : `lcdata.Dataset`
+        Dataset to retrieve the bands from
+
+    Returns
+    -------
+    bands
+        List of bands in the dataset sorted by effective wavelength
+    """
+    bands = set()
+    for lc in dataset.light_curves:
+        bands = bands.union(lc['band'])
+
+    sorted_bands = np.array(sorted(bands, key=get_band_effective_wavelength))
+
+    return sorted_bands

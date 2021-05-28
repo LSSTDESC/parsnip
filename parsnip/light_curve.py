@@ -85,7 +85,7 @@ def preprocess_light_curve(light_curve, settings):
         (time_indices >= -settings['time_pad'])
         & (time_indices < settings['time_window'] + settings['time_pad'])
     )
-    new_lc['grid_time'] = grid_times
+    new_lc['time'] = grid_times
     new_lc['time_index'] = time_indices
 
     # Correct background levels for bands that need it.
@@ -98,6 +98,7 @@ def preprocess_light_curve(light_curve, settings):
         outside_obs = new_lc[~time_mask & band_mask]
         if len(outside_obs) == 0:
             # No outside observations, don't update the background level.
+            # TODO: Reject all observations in this band?
             continue
 
         # Estimate the background level and subtract it.
@@ -129,8 +130,8 @@ def preprocess_light_curve(light_curve, settings):
     new_lc['flux'] /= scale
     new_lc['fluxerr'] /= scale
 
-    new_lc.meta['reference_time'] = reference_time
-    new_lc.meta['scale'] = scale
-    new_lc.meta['_parsnip_preprocessed'] = True
+    new_lc.meta['parsnip_reference_time'] = reference_time
+    new_lc.meta['parsnip_scale'] = scale
+    new_lc.meta['parsnip_preprocessed'] = True
 
     return new_lc
