@@ -10,57 +10,16 @@ from astropy.cosmology import Planck18
 import astropy.table
 import extinction
 import sncosmo
-import lcdata
 
 import torch
 import torch.utils.data
 from torch import nn, optim
 from torch.nn import functional as F
+from torch.utils.data import DataLoader
 
 from .light_curve import preprocess_light_curve
 from .utils import frac_to_mag
 from .settings import parse_settings
-
-
-class ParsnipDataLoader():
-    def __init__(self, dataset, model, shuffle=False):
-        self.dataset = dataset
-        self.model = model
-        self.shuffle = shuffle
-
-        if self.shuffle:
-            self._ordered_light_curves = np.random.permutation(
-                self.dataset.light_curves
-            )
-        else:
-            self._ordered_light_curves = self.dataset.light_curves
-
-    def __len__(self):
-        return len(self.dataset.light_curves)
-
-    def __getitem__(self, index):
-        light_curves = self._ordered_light_curves[index]
-        return self.model.get_data(light_curves)
-
-    def __iter__(self):
-        """Setup iteration over batches"""
-        self.batch_idx = 0
-        return self
-
-    def __next__(self):
-        """Retrieve the next batch"""
-        start = self.batch_idx * self.model.settings['batch_size']
-        end = (self.batch_idx + 1) * self.model.settings['batch_size']
-        if start >= len(self):
-            raise StopIteration
-        else:
-            self.batch_idx += 1
-            return self[start:end]
-
-    @property
-    def num_batches(self):
-        """Return the number of batches that this dataset is split into"""
-        return 1 + (len(self) + 1) // self.model.settings['batch_size']
 
 
 class ResidualBlock(nn.Module):
@@ -124,8 +83,8 @@ class GlobalMaxPoolingTime(nn.Module):
 
 
 class ParsnipModel(nn.Module):
-    def __init__(self, path, bands, device='cpu', threads=8, augment=False,
-                 settings={}, ignore_unknown_settings=False):
+    def __init__(self, path, bands, device='cpu', threads=8, settings={},
+                 ignore_unknown_settings=False):
         super().__init__()
 
         # Parse settings
@@ -133,7 +92,6 @@ class ParsnipModel(nn.Module):
                                        ignore_unknown_settings=ignore_unknown_settings)
 
         self.path = path
-        self.augment = augment
         self.threads = threads
 
         # Setup the device
@@ -210,7 +168,7 @@ class ParsnipModel(nn.Module):
         torch.save([self.settings, self.state_dict()], self.path)
 
     @classmethod
-    def load(cls, path, device='cpu', threads=8, augment=False):
+    def load(cls, path, device='cpu', threads=8):
         """Load a model"""
 
         # Load the model data
@@ -218,7 +176,7 @@ class ParsnipModel(nn.Module):
         settings, state_dict = torch.load(path, use_device)
 
         # Instantiate the model
-        model = cls(path, settings['bands'], use_device, threads, augment, settings)
+        model = cls(path, settings['bands'], use_device, threads, settings)
         model.load_state_dict(state_dict)
 
         return model
@@ -346,10 +304,17 @@ class ParsnipModel(nn.Module):
 
     def preprocess(self, dataset, chunksize=64, verbose=True):
         """Preprocess a dataset"""
+        # Check if we were given a preprocessed dataset. We store our preprocessed data
+        # as the parsnip_data variable.
+        if hasattr(dataset, 'parsnip_data'):
+            # Already preprocessed
+            return dataset
+
         if self.threads == 1:
             iterator = dataset.light_curves
             if verbose:
-                iterator = tqdm(dataset.light_curves, file=sys.stdout)
+                iterator = tqdm(dataset.light_curves, file=sys.stdout,
+                                desc="Preprocessing dataset")
 
             # Run on a single core without multiprocessing
             preprocessed_light_curves = [preprocess_light_curve(lc, self.settings) for
@@ -362,13 +327,79 @@ class ParsnipModel(nn.Module):
                 iterator = p.imap(func, dataset.light_curves, chunksize=chunksize)
                 if verbose:
                     iterator = tqdm(iterator, total=len(dataset.light_curves),
-                                    file=sys.stdout)
+                                    file=sys.stdout, desc="Preprocessing dataset")
                 preprocessed_light_curves = list(iterator)
 
-        # Make a new dataset
-        preprocessed_dataset = lcdata.from_light_curves(preprocessed_light_curves)
+        # Return the light curves.
+        dataset.parsnip_data = preprocessed_light_curves
 
-        return preprocessed_dataset
+    def augment_light_curves(self, light_curves, as_table=True):
+        """Augment a set of light curves."""
+        # Check if we have a list of light curves or a single one and handle it
+        # appropriately.
+        if isinstance(light_curves, astropy.table.Table):
+            # Single object. Wrap it so that we can process it as an array. We'll unwrap
+            # it at the end.
+            single = True
+            light_curves = [light_curves]
+        else:
+            single = False
+
+        new_light_curves = np.empty(shape=len(light_curves), dtype=object)
+
+        for idx, lc in enumerate(light_curves):
+            # Convert the table to a numpy recarray. This is much faster to work with.
+            data = lc.as_array()
+
+            # Randomly drop observations and make a copy of the light curve.
+            drop_frac = np.random.uniform(0, 0.5)
+            mask = np.random.rand(len(data)) < drop_frac
+            data = data[mask]
+
+            # Shift the time randomly.
+            time_shift = np.round(
+                np.random.normal(0., self.settings['time_sigma'])
+            ).astype(int)
+            data['time'] -= time_shift
+            data['time_index'] -= time_shift
+
+            # Scale the amplitude randomly.
+            amp_scale = np.exp(np.random.normal(0, 0.5))
+            data['flux'] /= amp_scale
+            data['fluxerr'] /= amp_scale
+
+            # Add noise to the observations
+            if np.random.rand() < 0.5 and len(data) > 0:
+                # Choose an overall scale for the noise from a lognormal
+                # distribution.
+                noise_scale = np.random.lognormal(-4., 1.)
+
+                # Choose the noise levels for each observation from a lognormal
+                # distribution.
+                noise_sigmas = np.random.lognormal(np.log(noise_scale), 1., len(data))
+
+                # Add the noise to the observations.
+                data['flux'] += np.random.normal(0., noise_sigmas)
+                data['fluxerr'] = np.sqrt(data['fluxerr']**2 + noise_sigmas**2)
+
+            # Update the metadata
+            meta = lc.meta.copy()
+            meta['augment_time_shift'] = time_shift
+            meta['augment_scale'] = amp_scale
+
+            # Convert back to an astropy Table if desired. This is slow, so we skip it
+            # if we can.
+            if as_table:
+                new_lc = astropy.table.Table(data, meta=meta)
+            else:
+                new_lc = (data, meta)
+
+            new_light_curves[idx] = new_lc
+
+        if single:
+            return new_light_curves[0]
+        else:
+            return new_light_curves
 
     def get_data(self, light_curves):
         """Extract data needed by ParSNIP from a light curve or set of light curves."""
@@ -382,123 +413,74 @@ class ParsnipModel(nn.Module):
         else:
             single = False
 
-        input_data = []
-        compare_data = []
-        redshifts = []
-
         # Extract the data from each light curve. Numpy is much faster than torch for
         # vector operations currently, so do as much as we can in numpy before
         # converting to torch tensors.
-        fluxes = []
-        flux_errors = []
-        band_indices = []
-        time_indices = []
+        redshifts = []
+
+        data = []
         batch_indices = []
-        weights = []
 
         compare_data = []
         compare_band_indices = []
-        redshifts = []
-        amp_scales = []
 
         for idx, lc in enumerate(light_curves):
-            # Extract the redshift.
-            redshifts.append(lc.meta['redshift'])
-
-            if self.augment:
-                time_shift = np.round(
-                    np.random.normal(0., self.settings['time_sigma'])
-                ).astype(int)
-                amp_scale = np.exp(np.random.normal(0, 0.5))
+            # Convert the table to a numpy recarray. This is much faster to work with.
+            # For augmentation, we skip creating a Table because that is slow and just
+            # keep the recarray. Handle that too.
+            if isinstance(lc, astropy.table.Table):
+                lc_data = lc.as_array()
+                lc_meta = lc.meta
             else:
-                time_shift = 0
-                amp_scale = 1.
+                lc_data, lc_meta = lc
 
-            amp_scales.append(amp_scale)
+            # Extract the redshift.
+            redshifts.append(lc_meta['redshift'])
 
-            # Shift and scale the grid data
-            obj_times = lc['time'] + time_shift
-            obj_flux = lc['flux'] * amp_scale
-            obj_flux_error = lc['fluxerr'] * amp_scale
-            obj_band_indices = lc['band_index']
-            obj_time_indices = lc['time_index'] + time_shift
-            obj_batch_indices = np.ones_like(obj_band_indices) * idx
+            # Mask out observations that are outside of our window.
+            mask = (lc_data['time_index'] >= 0) & (lc_data['time_index'] <
+                                                   self.settings['time_window'])
+            lc_data = lc_data[mask]
+            data.append(lc_data)
 
-            # Mask out observations that is outside of the window of the input.
-            mask = (obj_time_indices >= 0) & (obj_time_indices <
-                                              self.settings['time_window'])
+            # Batch indices
+            lc_batch_indices = np.ones_like(lc_data['band_index']) * idx
+            batch_indices.append(lc_batch_indices)
 
-            if self.augment:
-                # Choose a fraction of observations to randomly drop
-                drop_frac = np.random.uniform(0, 0.5)
-                mask[np.random.rand(len(obj_times)) < drop_frac] = False
-
-            # Apply the mask
-            obj_times = obj_times[mask]
-            obj_flux = obj_flux[mask]
-            obj_flux_error = obj_flux_error[mask]
-            obj_band_indices = obj_band_indices[mask]
-            obj_time_indices = obj_time_indices[mask]
-            obj_batch_indices = obj_batch_indices[mask]
-
-            if self.augment:
-                # Add noise to the observations
-                if np.random.rand() < 0.5 and len(obj_flux) > 0:
-                    # Choose an overall scale for the noise from a lognormal
-                    # distribution.
-                    noise_scale = np.random.lognormal(-4., 1.)
-
-                    # Choose the noise levels for each observation from a lognormal
-                    # distribution.
-                    noise_means = np.random.lognormal(np.log(noise_scale), 1.,
-                                                      len(obj_flux))
-
-                    # Add the noise to the observations.
-                    obj_flux = obj_flux + np.random.normal(0., noise_means)
-                    obj_flux_error = np.sqrt(obj_flux_error**2 + noise_means**2)
-
-            # Compute the weight that will be used for comparing the model to the input
-            # data. We use the observed error with an error floor.
-            obj_weight = 1. / (obj_flux_error**2 + self.settings['error_floor']**2)
+            # Calculate weights for the compare data with an error floor included.
+            compare_weights = 1 / (lc_data['fluxerr']**2 +
+                                   self.settings['error_floor']**2)
 
             # Stack all of the data that will be used for comparisons and convert it to
             # a torch tensor.
             obj_compare_data = torch.FloatTensor(np.vstack([
-                obj_times,
-                obj_flux,
-                obj_flux_error,
-                obj_weight,
+                lc_data['time'],
+                lc_data['flux'],
+                lc_data['fluxerr'],
+                compare_weights,
             ]))
             compare_data.append(obj_compare_data.T)
-            compare_band_indices.append(torch.LongTensor(obj_band_indices))
-
-            fluxes.append(obj_flux)
-            flux_errors.append(obj_flux_error)
-            band_indices.append(obj_band_indices)
-            time_indices.append(obj_time_indices)
-            batch_indices.append(obj_batch_indices)
-            weights.append(obj_weight)
+            compare_band_indices.append(torch.LongTensor(lc_data['band_index'].copy()))
 
         # Gather the input data.
-        fluxes = np.concatenate(fluxes)
-        flux_errors = np.concatenate(flux_errors)
-        band_indices = np.concatenate(band_indices)
-        time_indices = np.concatenate(time_indices)
-        batch_indices = np.concatenate(batch_indices)
-        weights = np.concatenate(weights)
         redshifts = np.array(redshifts)
-        amp_scales = np.array(amp_scales)
+        data = np.concatenate(data)
+        batch_indices = np.concatenate(batch_indices)
 
         # Build a grid for the input
         grid_flux = np.zeros((len(light_curves), len(self.settings['bands']),
                               self.settings['time_window']))
         grid_weights = np.zeros_like(grid_flux)
 
-        grid_flux[batch_indices, band_indices, time_indices] = fluxes
-        grid_weights[batch_indices, band_indices, time_indices] = weights
+        grid_flux[batch_indices, data['band_index'], data['time_index']] = data['flux']
 
-        # Scale the weights so that they are between 0 and 1.
-        grid_weights *= self.settings['error_floor']**2
+        # Use the inverse of the fluxerr squared with an error floor as a weight. We
+        # rescale the weight so that it is between 0 (for a poorly measured observation)
+        # and 1 (for a very well-measured observation).
+        grid_weights[batch_indices, data['band_index'], data['time_index']] = (
+            self.settings['error_floor']**2 / (data['fluxerr']**2 +
+                                               self.settings['error_floor']**2)
+        )
 
         # Stack the input data
         if self.settings['input_redshift']:
@@ -525,9 +507,9 @@ class ParsnipModel(nn.Module):
 
         if single:
             return (input_data[0], compare_data[0], redshifts[0],
-                    compare_band_indices[0], amp_scales[0])
+                    compare_band_indices[0])
         else:
-            return input_data, compare_data, redshifts, compare_band_indices, amp_scales
+            return input_data, compare_data, redshifts, compare_band_indices
 
     def build_model(self):
         """Build the model"""
@@ -633,6 +615,17 @@ class ParsnipModel(nn.Module):
 
         self.decode_layers = nn.Sequential(*decode_layers)
 
+    def get_data_loader(self, dataset, augment=False, **kwargs):
+        self.preprocess(dataset)
+
+        if augment:
+            collate_fn = functools.partial(self.augment_light_curves, as_table=False)
+        else:
+            collate_fn = list
+
+        return DataLoader(dataset.parsnip_data, batch_size=self.settings['batch_size'],
+                          collate_fn=collate_fn, **kwargs)
+
     def encode(self, input_data):
         # Apply common encoder blocks
         e = self.encode_layers(input_data)
@@ -737,13 +730,20 @@ class ParsnipModel(nn.Module):
 
         return ref_times, color, encoding
 
-    def forward(self, input_data, compare_data, redshifts, band_indices,
-                sample=True):
+    def forward(self, light_curves, sample=True, to_numpy=False):
+        # Extract the data that we need and move it to the right device.
+        data = self.get_data(light_curves)
+        data = [i.to(self.device) for i in data]
+        input_data, compare_data, redshifts, band_indices = data
+
+        # Encode the light curves.
         encoding_mu, encoding_logvar = self.encode(input_data)
 
+        # Sample from the latent space.
         ref_times, color, encoding = self.sample(encoding_mu, encoding_logvar,
                                                  sample=sample)
 
+        # Decode the light curves
         model_spectra, model_flux = self.decode(
             encoding, ref_times, color, compare_data[:, 0], redshifts, band_indices
         )
@@ -751,15 +751,32 @@ class ParsnipModel(nn.Module):
         flux = compare_data[:, 1]
         weight = compare_data[:, 3]
 
-        # Analytically evaluate the conditional distribution for the amplitude.
+        # Analytically evaluate the conditional distribution for the amplitude and
+        # sample from it.
         amplitude_mu, amplitude_logvar = self.compute_amplitude(weight, model_flux,
                                                                 flux)
         amplitude = self.reparameterize(amplitude_mu, amplitude_logvar, sample=sample)
         model_flux = model_flux * amplitude[:, None]
         model_spectra = model_spectra * amplitude[:, None, None]
 
-        return (encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, ref_times,
-                color, encoding, amplitude, model_flux, model_spectra)
+        result = {
+            'ref_times': ref_times,
+            'color': color,
+            'encoding': encoding,
+            'amplitude': amplitude,
+            'model_flux': model_flux,
+            'model_spectra': model_spectra,
+            'encoding_mu': encoding_mu,
+            'encoding_logvar': encoding_logvar,
+            'amplitude_mu': amplitude_mu,
+            'amplitude_logvar': amplitude_logvar,
+            'compare_data': compare_data,
+        }
+
+        if to_numpy:
+            result = {k: v.detach().cpu().numpy() for k, v in result.items()}
+
+        return result
 
     def compute_amplitude(self, weight, model_flux, flux):
         num = torch.sum(weight * model_flux * flux, axis=1)
@@ -774,29 +791,28 @@ class ParsnipModel(nn.Module):
 
         return amplitude_mu, amplitude_logvar
 
-    def loss_function(self, compare_data, encoding_mu, encoding_logvar, amplitude_mu,
-                      amplitude_logvar, amplitude, model_flux, model_spectra,
-                      return_components=False):
-        flux = compare_data[:, 1]
-        weight = compare_data[:, 3]
+    def loss_function(self, result, return_components=False):
+        flux = result['compare_data'][:, 1]
+        weight = result['compare_data'][:, 3]
 
         # Reconstruction likelihood
-        nll = torch.sum(0.5 * weight * (flux - model_flux)**2)
+        nll = torch.sum(0.5 * weight * (flux - result['model_flux'])**2)
 
         # KL divergence
-        kld = -0.5 * torch.sum(1 + encoding_logvar - encoding_mu.pow(2) -
-                               encoding_logvar.exp())
+        kld = -0.5 * torch.sum(1 + result['encoding_logvar'] -
+                               result['encoding_mu'].pow(2) -
+                               result['encoding_logvar'].exp())
 
         # Regularization of spectra
         diff = (
-            (model_spectra[:, 1:, :] - model_spectra[:, :-1, :])
-            / (model_spectra[:, 1:, :] + model_spectra[:, :-1, :])
+            (result['model_spectra'][:, 1:, :] - result['model_spectra'][:, :-1, :])
+            / (result['model_spectra'][:, 1:, :] + result['model_spectra'][:, :-1, :])
         )
         penalty = self.settings['penalty'] * torch.sum(diff**2)
 
         # Amplitude probability for the importance sampling integral
-        amp_prob = -0.5 * torch.sum((amplitude - amplitude_mu)**2 /
-                                    amplitude_logvar.exp())
+        amp_prob = -0.5 * torch.sum((result['amplitude'] - result['amplitude_mu'])**2 /
+                                    result['amplitude_logvar'].exp())
 
         if return_components:
             return torch.stack([nll, kld, penalty, amp_prob])
@@ -821,102 +837,56 @@ class ParsnipModel(nn.Module):
             Computed loss function
         """
         self.eval()
-        loader = ParsnipDataLoader(dataset, self)
 
         total_loss = 0
         total_count = 0
 
-        # We score the dataset without augmentation for consistency. Keep track of
-        # whether augmentation was turned on so that we can revert to the previous
-        # state after we're done.
-        augment_state = self.augment
+        # Compute the loss
+        for round in range(rounds):
+            for batch_lcs in self.get_data_loader(dataset):
+                result = self(batch_lcs)
+                loss = self.loss_function(result, return_components)
 
-        try:
-            self.augment = False
-
-            # Compute the loss
-            for round in range(rounds):
-                for batch_data in loader:
-                    input_data, compare_data, redshifts, band_indices, amp_scales \
-                        = batch_data
-
-                    input_data = input_data.to(self.device)
-                    compare_data = compare_data.to(self.device)
-                    redshifts = redshifts.to(self.device)
-                    band_indices = band_indices.to(self.device)
-
-                    encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, \
-                        ref_times, color, encoding, amplitude, model_flux, \
-                        model_spectra = \
-                        self(input_data, compare_data, redshifts, band_indices)
-
-                    loss = self.loss_function(compare_data, encoding_mu,
-                                              encoding_logvar, amplitude_mu,
-                                              amplitude_logvar, amplitude,
-                                              model_flux, model_spectra,
-                                              return_components)
-
-                    if return_components:
-                        total_loss += loss.detach().cpu().numpy()
-                    else:
-                        total_loss += loss.item()
-                    total_count += len(input_data)
-        finally:
-            # Make sure that we flip the augment switch back to what it started as.
-            self.augment = augment_state
+                if return_components:
+                    total_loss += loss.detach().cpu().numpy()
+                else:
+                    total_loss += loss.item()
+                total_count += len(batch_lcs)
 
         loss = total_loss / total_count
 
         return loss
 
-    def fit(self, dataset, max_epochs=1000, test_dataset=None):
+    def fit(self, dataset, max_epochs=1000, augment=True, test_dataset=None):
         """Fit the model to a dataset"""
-
         # The model is stochastic, so the loss function will have a fair bit of noise.
         # If the dataset is small, we run through several augmentations of it every
         # epoch to get the noise down.
         repeats = int(np.ceil(25000 / len(dataset)))
 
         while self.epoch < max_epochs:
-            loader = ParsnipDataLoader(dataset, self, shuffle=True)
+            loader = self.get_data_loader(dataset, augment=augment, shuffle=True)
             self.train()
             train_loss = 0
             train_count = 0
 
-            with tqdm(range(loader.num_batches * repeats), file=sys.stdout) as pbar:
+            with tqdm(range(len(loader) * repeats), file=sys.stdout) as pbar:
                 for repeat in range(repeats):
                     # Training step
-                    for batch_data in loader:
-                        input_data, compare_data, redshifts, band_indices, amp_scales \
-                            = batch_data
-
-                        input_data = input_data.to(self.device)
-                        compare_data = compare_data.to(self.device)
-                        redshifts = redshifts.to(self.device)
-                        band_indices = band_indices.to(self.device)
-
+                    for batch_lcs in loader:
                         self.optimizer.zero_grad()
-                        encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, \
-                            ref_times, color, encoding, amplitude, model_flux, \
-                            model_spectra = \
-                            self(input_data, compare_data, redshifts, band_indices)
+                        result = self(batch_lcs)
 
-                        loss = self.loss_function(compare_data, encoding_mu,
-                                                  encoding_logvar, amplitude_mu,
-                                                  amplitude_logvar, amplitude,
-                                                  model_flux, model_spectra)
-
-                        if np.isnan(loss.cpu().detach().numpy()):
-                            return amplitude_mu, batch_data, model_flux
+                        loss = self.loss_function(result)
 
                         loss.backward()
                         train_loss += loss.item()
                         self.optimizer.step()
 
-                        train_count += len(input_data)
+                        train_count += len(batch_lcs)
 
                         total_loss = train_loss / train_count
-                        batch_loss = loss.item() / len(input_data)
+                        batch_loss = loss.item() / len(batch_lcs)
 
                         pbar.set_description(
                             f'Epoch {self.epoch:4d}: Loss: {total_loss:8.4f} '
@@ -949,25 +919,20 @@ class ParsnipModel(nn.Module):
 
             self.epoch += 1
 
-    def predict_dataset(self, dataset, sample=False):
+    def predict_dataset(self, dataset, augment=False, sample=False):
+        print("TODO: handle luminosity properly for augmented datasets!")
         predictions = []
 
-        loader = ParsnipDataLoader(dataset, self)
-
-        for input_data, compare_data, redshifts, band_indices, amp_scales in loader:
+        for batch_lcs in self.get_data_loader(dataset, augment=augment):
             # Run the data through the model.
-            input_data_device = input_data.to(self.device)
-            compare_data_device = compare_data.to(self.device)
-            redshifts_device = redshifts.to(self.device)
-            band_indices_device = band_indices.to(self.device)
+            result = self.forward(batch_lcs, sample=sample, to_numpy=True)
 
-            result = self.forward(input_data_device, compare_data_device,
-                                  redshifts_device, band_indices_device,
-                                  sample=sample)
-            result = [i.cpu().detach().numpy() for i in result]
-            encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, ref_times, \
-                color, encoding, amplitude, model_flux, model_spectra = result
-            encoding_err = np.sqrt(np.exp(encoding_logvar))
+            encoding_mu = result['encoding_mu']
+            encoding_err = np.sqrt(np.exp(result['encoding_logvar']))
+
+            amp_scales = np.array([i.meta['parsnip_scale'] for i in batch_lcs])
+            amplitude_mu = result['amplitude_mu'] / amp_scales
+            amplitude_error = np.sqrt(np.exp(result['amplitude_logvar'])) / amp_scales
 
             # Pull out the keys that we care about saving.
             batch_predictions = {
@@ -976,8 +941,8 @@ class ParsnipModel(nn.Module):
                                          self.settings['time_sigma']),
                 'color': encoding_mu[:, 1] * self.settings['color_sigma'],
                 'color_error': encoding_err[:, 1] * self.settings['color_sigma'],
-                'amplitude': amplitude_mu / amp_scales,
-                'amplitude_error': np.sqrt(np.exp(amplitude_logvar)) / amp_scales,
+                'amplitude': amplitude_mu,
+                'amplitude_error': amplitude_error,
             }
 
             for idx in range(self.settings['latent_size']):
@@ -985,8 +950,8 @@ class ParsnipModel(nn.Module):
                 batch_predictions[f's{idx+1}_error'] = encoding_err[:, 2 + idx]
 
             # Calculate other features
-            time, flux, fluxerr, weight = [i.detach().numpy() for i in
-                                           compare_data.permute(1, 0, 2)]
+            time, flux, fluxerr, weight = result['compare_data'].permute(1, 0, 2)
+
             fluxerr_mask = fluxerr == 0
             fluxerr[fluxerr_mask] = -1.
 
@@ -1073,30 +1038,20 @@ class ParsnipModel(nn.Module):
             Dataframe with one row for each light curve and columns with each of the
             predicted values.
         """
-        # Keep track of whether augmentation was turned on so that we can revert to the
-        # previous state after we're done.
-        augment_state = self.augment
+        # First pass without augmentation.
+        pred = self.predict_dataset(dataset, sample=sample)
+        pred['original_object_id'] = pred.index
+        pred['augmented'] = False
 
-        try:
-            # First pass without augmentation.
-            self.augment = False
-            pred = self.predict_dataset(dataset, sample=sample)
+        predictions = [pred]
+
+        # Next passes with augmentation.
+        for idx in tqdm(range(augments), file=sys.stdout):
+            pred = self.predict_dataset(dataset, sample=sample, augment=True)
             pred['original_object_id'] = pred.index
-            pred['augmented'] = False
-
-            predictions = [pred]
-
-            # Next passes with augmentation.
-            self.augment = True
-            for idx in tqdm(range(augments), file=sys.stdout):
-                pred = self.predict_dataset(dataset, sample=sample)
-                pred['original_object_id'] = pred.index
-                pred['augmented'] = True
-                pred.index = [i + f'_aug_{idx+1}' for i in pred.index]
-                predictions.append(pred)
-        finally:
-            # Make sure that we flip the augment switch back to what it started as.
-            self.augment = augment_state
+            pred['augmented'] = True
+            pred.index = [i + f'_aug_{idx+1}' for i in pred.index]
+            predictions.append(pred)
 
         predictions = pd.concat(predictions)
         return predictions
