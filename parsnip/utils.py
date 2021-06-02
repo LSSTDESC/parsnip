@@ -259,7 +259,7 @@ def split_train_test(dataset):
     We train on 90%, and test on 10%.
     """
     # Keep part of the dataset for validation
-    train_mask = np.ones(len(dataset.objects), dtype=bool)
+    train_mask = np.ones(len(dataset), dtype=bool)
     train_mask[::10] = False
     test_mask = ~train_mask
 

@@ -8,19 +8,21 @@ import avocado
 from . import preprocess_light_curve
 
 
-def plot_light_curve(model, light_curve, count=100, show_model=True, show_bands=True,
+def plot_light_curve(light_curve, model=None, count=100, show_bands=True,
                      show_missing_bandpasses=False, percentile=68, ax=None, **kwargs):
+    # TODO: make this work even if model is None, and make it work with both
+    # preprocessed and not preprocessed light curves.
     if not light_curve.meta.get('parsnip_preprocessed', False):
         light_curve = preprocess_light_curve(model, light_curve)
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(5, 4), constrained_layout=True)
 
-    model_times, model_flux, data, model_result = model.predict_light_curve(
+    model_times, model_flux, model_result = model.predict_light_curve(
         light_curve, count, **kwargs
     )
 
-    input_data, compare_data, redshifts, band_indices, amp_scales = data
+    input_data, compare_data, redshifts, band_indices = data
 
     band_indices = band_indices.detach().cpu().numpy()
     compare_data = compare_data.detach().cpu().numpy()
@@ -52,7 +54,7 @@ def plot_light_curve(model, light_curve, count=100, show_model=True, show_bands=
         else:
             label = None
 
-        if not show_model:
+        if model is None:
             # Don't show the model
             band_max_model = np.max(model_flux[band_idx])
         elif count == 0:

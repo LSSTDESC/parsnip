@@ -170,6 +170,7 @@ class ParsnipModel(nn.Module):
     @classmethod
     def load(cls, path, device='cpu', threads=8):
         """Load a model"""
+        # TODO: split this out as load_model, and put parse_device in utils.py
 
         # Load the model data
         use_device = cls._parse_device(device)
@@ -404,20 +405,7 @@ class ParsnipModel(nn.Module):
             return new_light_curves
 
     def get_data(self, light_curves):
-        """Extract data needed by ParSNIP from a light curve or set of light curves."""
-        # Check if we have a list of light curves or a single one and handle it
-        # appropriately.
-        if isinstance(light_curves, astropy.table.Table):
-            # Single object. Wrap it so that we can process it as an array. We'll unwrap
-            # it at the end.
-            single = True
-            light_curves = [light_curves]
-        else:
-            single = False
-
-        # Extract the data from each light curve. Numpy is much faster than torch for
-        # vector operations currently, so do as much as we can in numpy before
-        # converting to torch tensors.
+        """Extract data needed by ParSNIP from a set of light curves."""
         redshifts = []
 
         data = []
@@ -507,11 +495,13 @@ class ParsnipModel(nn.Module):
         compare_band_indices = nn.utils.rnn.pad_sequence(compare_band_indices,
                                                          batch_first=True)
 
-        if single:
-            return (input_data[0], compare_data[0], redshifts[0],
-                    compare_band_indices[0])
-        else:
-            return input_data, compare_data, redshifts, compare_band_indices
+        # Send the arrays to the model's device.
+        input_data = input_data.to(self.device)
+        compare_data = compare_data.to(self.device)
+        redshifts = redshifts.to(self.device)
+        compare_band_indices = compare_band_indices.to(self.device)
+
+        return input_data, compare_data, redshifts, compare_band_indices
 
     def build_model(self):
         """Build the model"""
@@ -742,9 +732,7 @@ class ParsnipModel(nn.Module):
 
     def forward(self, light_curves, sample=True, to_numpy=False):
         # Extract the data that we need and move it to the right device.
-        data = self.get_data(light_curves)
-        data = [i.to(self.device) for i in data]
-        input_data, compare_data, redshifts, band_indices = data
+        input_data, compare_data, redshifts, band_indices = self.get_data(light_curves)
 
         # Encode the light curves.
         encoding_mu, encoding_logvar = self.encode(input_data)
@@ -856,7 +844,7 @@ class ParsnipModel(nn.Module):
         # Compute the loss
         for round in range(rounds):
             for batch_lcs in loader:
-                result = self(batch_lcs)
+                result = self.forward(batch_lcs)
                 loss = self.loss_function(result, return_components)
 
                 if return_components:
@@ -891,7 +879,7 @@ class ParsnipModel(nn.Module):
                     # Training step
                     for batch_lcs in loader:
                         self.optimizer.zero_grad()
-                        result = self(batch_lcs)
+                        result = self.forward(batch_lcs)
 
                         loss = self.loss_function(result)
 
@@ -1074,59 +1062,47 @@ class ParsnipModel(nn.Module):
         predictions = pd.concat(predictions)
         return predictions
 
-    def _predict_single(self, obj, pred_times, pred_bands, count):
-        data = self.get_data(obj)
-        input_data, compare_data, redshifts, band_indices, amp_scales = data
-
-        # Add batch dimension
-        input_data = input_data[None, :, :].to(self.device)
-        compare_data = compare_data[None, :, :].to(self.device)
-        redshifts = redshifts.reshape(1).to(self.device)
-        band_indices = band_indices[None, :].to(self.device)
-
+    def _predict_single(self, lc, pred_times, pred_bands, count):
         pred_times = torch.FloatTensor(pred_times)[None, :].to(self.device)
         pred_bands = torch.LongTensor(pred_bands)[None, :].to(self.device)
 
-        if count > 0:
+        if count is not None:
             # Predict multiple light curves
-            input_data = input_data.repeat(count, 1, 1)
-            compare_data = compare_data.repeat(count, 1, 1)
-            redshifts = redshifts.repeat(count)
-            band_indices = band_indices.repeat(count, 1)
-
+            light_curves = [lc] * count
             pred_times = pred_times.repeat(count, 1)
             pred_bands = pred_bands.repeat(count, 1)
+        else:
+            light_curves = [lc]
 
         # Sample VAE parameters
-        result = self.forward(input_data, compare_data, redshifts, band_indices)
-
-        encoding_mu, encoding_logvar, amplitude_mu, amplitude_logvar, ref_times, \
-            color, encoding, amplitude, model_flux, model_spectra = result
+        result = self.forward(light_curves)
 
         # Do the predictions
+        redshifts = torch.FloatTensor([i.meta['redshift'] for i in light_curves],
+                                      device=self.device)
         model_spectra, model_flux = self.decode(
-            encoding,
-            ref_times,
-            color,
+            result['encoding'],
+            result['ref_times'],
+            result['color'],
             pred_times,
             redshifts,
             pred_bands,
-            amplitude,
+            result['amplitude'],
         )
 
         model_flux = model_flux.cpu().detach().numpy()
         model_spectra = model_spectra.cpu().detach().numpy()
 
-        if count == 0:
+        if count is None:
             # Get rid of the batch index
             model_flux = model_flux[0]
             model_spectra = model_spectra[0]
 
-        cpu_result = [i.cpu().detach().numpy() for i in result]
+        cpu_result = {k: v.detach().cpu().numpy() for k, v in result.items()}
 
-        return model_flux, model_spectra, data, cpu_result
+        return model_flux, model_spectra, cpu_result
 
-    def predict_light_curve(self, light_curve, count=0, sampling=1., pad=0.):
+    def predict_light_curve(self, light_curve, count=None, sampling=1., pad=0.):
         # Figure out where to sample the light curve
         min_time = -self.settings['time_window'] / 2. - pad
         max_time = self.settings['time_window'] / 2. + pad
@@ -1137,8 +1113,9 @@ class ParsnipModel(nn.Module):
         pred_times = np.tile(model_times, len(band_indices))
         pred_bands = np.repeat(band_indices, len(model_times))
 
-        model_flux, model_spectra, data, model_result = self._predict_single(
-            light_curve, pred_times, pred_bands, count)
+        model_flux, model_spectra, model_result = self._predict_single(
+            light_curve, pred_times, pred_bands, count
+        )
 
         # Reshape model_flux so that it has the shape (batch, band, time)
         model_flux = model_flux.reshape((-1, len(band_indices), len(model_times)))
@@ -1147,14 +1124,14 @@ class ParsnipModel(nn.Module):
             # Get rid of the batch index
             model_flux = model_flux[0]
 
-        return model_times, model_flux, data, model_result
+        return model_times, model_flux, model_result
 
-    def predict_spectrum(self, light_curve, time, count=0):
+    def predict_spectrum(self, light_curve, time, count=None):
         """Predict the spectrum of an object at a given time"""
         pred_times = [time]
         pred_bands = [0]
 
-        model_flux, model_spectra, data, model_result = self._predict_single(
+        model_flux, model_spectra, model_result = self._predict_single(
             light_curve, pred_times, pred_bands, count
         )
 
