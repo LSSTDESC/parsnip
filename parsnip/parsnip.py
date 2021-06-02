@@ -303,11 +303,13 @@ class ParsnipModel(nn.Module):
         print(f"ratio:                  {parsnip_photometry / sncosmo_photometry}")
 
     def preprocess(self, dataset, chunksize=64, verbose=True):
-        """Preprocess a dataset"""
+        """Preprocess an lcdata dataset"""
+        import lcdata
+
         # Check if we were given a preprocessed dataset. We store our preprocessed data
         # as the parsnip_data variable.
-        if hasattr(dataset, 'parsnip_data'):
-            # Already preprocessed
+        if ('parsnip_preprocessed' in dataset.meta.keys()
+                and np.all(dataset.meta['parsnip_preprocessed'])):
             return dataset
 
         if self.threads == 1:
@@ -330,8 +332,8 @@ class ParsnipModel(nn.Module):
                                     file=sys.stdout, desc="Preprocessing dataset")
                 preprocessed_light_curves = list(iterator)
 
-        # Return the light curves.
-        dataset.parsnip_data = preprocessed_light_curves
+        dataset = lcdata.from_light_curves(preprocessed_light_curves)
+        return dataset
 
     def augment_light_curves(self, light_curves, as_table=True):
         """Augment a set of light curves."""
@@ -383,12 +385,12 @@ class ParsnipModel(nn.Module):
                 data['fluxerr'] = np.sqrt(data['fluxerr']**2 + noise_sigmas**2)
 
             # Update the metadata
-            meta = lc.meta.copy()
+            meta = lc.meta.copy(use_cache=not as_table)
             meta['augment_time_shift'] = time_shift
             meta['augment_scale'] = amp_scale
 
-            # Convert back to an astropy Table if desired. This is slow, so we skip it
-            # if we can.
+            # Convert back to an astropy Table if desired. This is somewhat slow, so we
+            # skip it internally when training the model.
             if as_table:
                 new_lc = astropy.table.Table(data, meta=meta)
             else:
@@ -616,14 +618,22 @@ class ParsnipModel(nn.Module):
         self.decode_layers = nn.Sequential(*decode_layers)
 
     def get_data_loader(self, dataset, augment=False, **kwargs):
-        self.preprocess(dataset)
+        # Preprocess the dataset if it isn't already.
+        dataset = self.preprocess(dataset)
 
         if augment:
+            # Reset the metadata caches that we use to speed up augmenting.
+            for lc in dataset.light_curves:
+                lc.meta.copy(update_cache=True)
+
+            # To speed things up, don't create new astropy.Table objects for the
+            # augmented light curves. The `forward` method can handle the result that
+            # is returned by `augment_light_curves`.
             collate_fn = functools.partial(self.augment_light_curves, as_table=False)
         else:
             collate_fn = list
 
-        return DataLoader(dataset.parsnip_data, batch_size=self.settings['batch_size'],
+        return DataLoader(dataset.light_curves, batch_size=self.settings['batch_size'],
                           collate_fn=collate_fn, **kwargs)
 
     def encode(self, input_data):
@@ -841,9 +851,11 @@ class ParsnipModel(nn.Module):
         total_loss = 0
         total_count = 0
 
+        loader = self.get_data_loader(dataset)
+
         # Compute the loss
         for round in range(rounds):
-            for batch_lcs in self.get_data_loader(dataset):
+            for batch_lcs in loader:
                 result = self(batch_lcs)
                 loss = self.loss_function(result, return_components)
 
@@ -858,14 +870,18 @@ class ParsnipModel(nn.Module):
         return loss
 
     def fit(self, dataset, max_epochs=1000, augment=True, test_dataset=None):
-        """Fit the model to a dataset"""
+        """Fit the model to a lcdata dataset"""
         # The model is stochastic, so the loss function will have a fair bit of noise.
         # If the dataset is small, we run through several augmentations of it every
         # epoch to get the noise down.
         repeats = int(np.ceil(25000 / len(dataset)))
 
+        loader = self.get_data_loader(dataset, augment=augment, shuffle=True)
+
+        if test_dataset is not None:
+            test_dataset = self.preprocess(test_dataset)
+
         while self.epoch < max_epochs:
-            loader = self.get_data_loader(dataset, augment=augment, shuffle=True)
             self.train()
             train_loss = 0
             train_count = 0
@@ -923,7 +939,9 @@ class ParsnipModel(nn.Module):
         print("TODO: handle luminosity properly for augmented datasets!")
         predictions = []
 
-        for batch_lcs in self.get_data_loader(dataset, augment=augment):
+        loader = self.get_data_loader(dataset, augment=augment)
+
+        for batch_lcs in loader:
             # Run the data through the model.
             result = self.forward(batch_lcs, sample=sample, to_numpy=True)
 

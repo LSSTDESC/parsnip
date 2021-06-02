@@ -5,9 +5,14 @@ import itertools
 import numpy as np
 import avocado
 
+from . import preprocess_light_curve
+
 
 def plot_light_curve(model, light_curve, count=100, show_model=True, show_bands=True,
                      show_missing_bandpasses=False, percentile=68, ax=None, **kwargs):
+    if not light_curve.meta.get('parsnip_preprocessed', False):
+        light_curve = preprocess_light_curve(model, light_curve)
+
     if ax is None:
         fig, ax = plt.subplots(figsize=(5, 4), constrained_layout=True)
 
