@@ -10,83 +10,78 @@ from . import preprocess_light_curve
 
 def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=True,
                      show_missing_bandpasses=False, percentile=68, ax=None, **kwargs):
-    # TODO: make this work even if model is None, and make it work with both
-    # preprocessed and not preprocessed light curves.
-    if not light_curve.meta.get('parsnip_preprocessed', False):
-        light_curve = preprocess_light_curve(model, light_curve)
+    # TODO: for unpreprocessed light curves, show the model in the original units.
+    if not light_curve.meta.get('parsnip_preprocessed', False) and model is not None:
+        light_curve = preprocess_light_curve(light_curve, model.settings)
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(5, 4), constrained_layout=True)
 
-    model_times, model_flux, model_result = model.predict_light_curve(
-        light_curve, count, **kwargs
-    )
+    used_bandpasses = []
 
-    input_data, compare_data, redshifts, band_indices = data
+    band_groups = light_curve.group_by('band').groups
+    for band_name, band_data in zip(band_groups.keys['band'], band_groups):
+        if len(band_data) == 0:
+            continue
 
-    band_indices = band_indices.detach().cpu().numpy()
-    compare_data = compare_data.detach().cpu().numpy()
-
-    time, flux, fluxerr, weight = compare_data
-
-    max_model = 0.
-
-    # Use the offset from the model to get t=0
-    ref_time = model_result[0][0, 0] * model.settings['time_sigma']
-    time = time - ref_time
-    model_times = model_times - ref_time
-
-    for band_idx, band_name in enumerate(model.settings['bands']):
+        # TODO: Drop avocado dependency
         c = avocado.get_band_plot_color(band_name)
         marker = avocado.get_band_plot_marker(band_name)
 
-        match = band_indices == band_idx
+        ax.errorbar(band_data['time'], band_data['flux'], band_data['fluxerr'],
+                    fmt='o', c=c, label=band_name, elinewidth=1, marker=marker)
 
-        if not np.any(match) and not show_missing_bandpasses:
-            # No observations in this band, skip it.
-            continue
+        used_bandpasses.append(band_name)
 
-        ax.errorbar(time[match], flux[match], fluxerr[match], fmt='o', c=c,
-                    label=band_name, elinewidth=1, marker=marker)
+    if model is not None:
+        max_model = 0.
+        label_model = True
 
-        if band_idx == 0:
-            label = 'ParSNIP Model'
-        else:
-            label = None
+        model_times, model_flux, model_result = model.predict_light_curve(
+            light_curve, count, **kwargs
+        )
 
-        if model is None:
-            # Don't show the model
-            band_max_model = np.max(model_flux[band_idx])
-        elif count == 0:
-            # Single prediction
-            ax.plot(model_times, model_flux[band_idx], c=c, label=label)
-            band_max_model = np.max(model_flux[band_idx])
-        elif show_uncertainty_bands:
-            # Multiple predictions, show error bands.
-            percentile_offset = (100 - percentile) / 2.
-            flux_median = np.median(model_flux[:, band_idx], axis=0)
-            flux_min = np.percentile(model_flux[:, band_idx], percentile_offset,
-                                     axis=0)
-            flux_max = np.percentile(model_flux[:, band_idx],
-                                     100 - percentile_offset, axis=0)
-            ax.plot(model_times, flux_median, c=c, label=label)
-            ax.fill_between(model_times, flux_min, flux_max, color=c, alpha=0.3)
-            band_max_model = np.max(flux_median)
-        else:
-            # Multiple predictions, show raw light curves
-            ax.plot(model_times, model_flux[:, band_idx].T, c=c, alpha=0.1)
-            band_max_model = np.max(model_flux)
+        for band_idx, band_name in enumerate(model.settings['bands']):
+            if band_name not in used_bandpasses and not show_missing_bandpasses:
+                continue
 
-        max_model = max(max_model, band_max_model)
+            c = avocado.get_band_plot_color(band_name)
+            marker = avocado.get_band_plot_marker(band_name)
 
-    ax.set_ylim(-0.2 * max_model, 1.2 * max_model)
+            if label_model:
+                label = 'ParSNIP Model'
+                label_model = False
+            else:
+                label = None
+
+            if count == 0:
+                # Single prediction
+                ax.plot(model_times, model_flux[band_idx], c=c, label=label)
+                band_max_model = np.max(model_flux[band_idx])
+            elif show_uncertainty_bands:
+                # Multiple predictions, show error bands.
+                percentile_offset = (100 - percentile) / 2.
+                flux_median = np.median(model_flux[:, band_idx], axis=0)
+                flux_min = np.percentile(model_flux[:, band_idx], percentile_offset,
+                                         axis=0)
+                flux_max = np.percentile(model_flux[:, band_idx],
+                                         100 - percentile_offset, axis=0)
+                ax.plot(model_times, flux_median, c=c, label=label)
+                ax.fill_between(model_times, flux_min,
+                                flux_max, color=c, alpha=0.3)
+                band_max_model = np.max(flux_median)
+            else:
+                # Multiple predictions, show raw light curves
+                ax.plot(model_times, model_flux[:, band_idx].T, c=c, alpha=0.1)
+                band_max_model = np.max(model_flux)
+
+            max_model = max(max_model, band_max_model)
+
+        ax.set_ylim(-0.2 * max_model, 1.2 * max_model)
 
     ax.legend()
     ax.set_xlabel('Time (days)')
     ax.set_ylabel('Flux')
-
-    # Return the reference time that was used in the plot
-    return ref_time
 
 
 def plot_spectrum(model, light_curve, time, count=100, show_bands=True, percentile=68,
@@ -105,7 +100,8 @@ def plot_spectrum(model, light_curve, time, count=100, show_bands=True, percenti
         percentile_offset = (100 - percentile) / 2.
         flux_median = np.median(model_spectra, axis=0)
         flux_min = np.percentile(model_spectra, percentile_offset, axis=0)
-        flux_max = np.percentile(model_spectra, 100 - percentile_offset, axis=0)
+        flux_max = np.percentile(
+            model_spectra, 100 - percentile_offset, axis=0)
         ax.plot(model_wave, flux_median, c=c, label=label)
         ax.fill_between(model_wave, flux_min, flux_max, color=c, alpha=0.3)
     else:
@@ -137,7 +133,8 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
     cm = confusion_matrix(labels, classifications.idxmax(axis=1),
                           labels=class_names, normalize='true')
 
-    im = plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues, vmin=0, vmax=1)
+    im = plt.imshow(cm, interpolation='nearest',
+                    cmap=plt.cm.Blues, vmin=0, vmax=1)
     tick_marks = np.arange(len(class_names))
     plt.xticks(tick_marks, class_names, rotation=60, ha='right')
     plt.yticks(tick_marks, class_names)
