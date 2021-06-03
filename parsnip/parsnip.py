@@ -4,6 +4,7 @@ import multiprocessing
 import numpy as np
 import os
 import pandas as pd
+from scipy.interpolate import interp1d
 import sys
 
 from astropy.cosmology import Planck18
@@ -660,23 +661,36 @@ class ParsnipModel(nn.Module):
 
         return encoding_mu, encoding_logvar
 
+    def decode_spectra(self, encoding, phases, color, amplitude=None):
+        # TODO: Handle sidereal time properly
+        scale_phases = phases / (self.settings['time_window'] // 2)
+
+        repeat_encoding = encoding[:, :, None].expand((-1, -1, scale_phases.shape[1]))
+        stack_encoding = torch.cat([repeat_encoding, scale_phases[:, None, :]], 1)
+
+        # Apply intrinsic decoder
+        model_spectra = self.decode_layers(stack_encoding)
+
+        if color is not None:
+            # Apply colors
+            apply_colors = 10**(-0.4 * color[:, None] * self.color_law[None, :])
+            model_spectra = model_spectra * apply_colors[..., None]
+
+        if amplitude is not None:
+            # Apply amplitude
+            model_spectra = model_spectra * amplitude[:, None, None]
+
+        return model_spectra
+
     def decode(self, encoding, ref_times, color, times, redshifts, band_indices,
                amplitude=None):
-        repeat_encoding = encoding[:, :, None].expand((-1, -1, times.shape[1]))
-        use_times = (
+        phases = (
             (times - ref_times[:, None])
-            / (self.settings['time_window'] // 2)
             / (1 + redshifts[:, None])
         )
 
-        stack_encoding = torch.cat([repeat_encoding, use_times[:, None, :]], 1)
-
-        # Decode
-        model_spectra = self.decode_layers(stack_encoding)
-
-        # Apply colors
-        apply_colors = 10**(-0.4 * color[:, None] * self.color_law[None, :])
-        model_spectra = model_spectra * apply_colors[..., None]
+        # Generate the restframe spectra
+        model_spectra = self.decode_spectra(encoding, phases, color, amplitude)
 
         # Figure out the weights for each band
         band_weights = self.calculate_band_weights(redshifts)
@@ -694,10 +708,6 @@ class ParsnipModel(nn.Module):
 
         # Sum over each filter.
         model_flux = torch.sum(model_spectra * obs_band_weights, axis=1)
-
-        if amplitude is not None:
-            model_flux = model_flux * amplitude[:, None]
-            model_spectra = model_spectra * amplitude[:, None, None]
 
         return model_spectra, model_flux
 
@@ -762,13 +772,16 @@ class ParsnipModel(nn.Module):
             'color': color,
             'encoding': encoding,
             'amplitude': amplitude,
+            'time': compare_data[:, 0],
+            'obs_flux': compare_data[:, 1],
+            'obs_fluxerr': compare_data[:, 2],
+            'obs_weight': compare_data[:, 3],
             'model_flux': model_flux,
             'model_spectra': model_spectra,
             'encoding_mu': encoding_mu,
             'encoding_logvar': encoding_logvar,
             'amplitude_mu': amplitude_mu,
             'amplitude_logvar': amplitude_logvar,
-            'compare_data': compare_data,
         }
 
         if to_numpy:
@@ -790,11 +803,9 @@ class ParsnipModel(nn.Module):
         return amplitude_mu, amplitude_logvar
 
     def loss_function(self, result, return_components=False):
-        flux = result['compare_data'][:, 1]
-        weight = result['compare_data'][:, 3]
-
         # Reconstruction likelihood
-        nll = torch.sum(0.5 * weight * (flux - result['model_flux'])**2)
+        nll = torch.sum(0.5 * result['obs_weight'] *
+                        (result['obs_flux'] - result['model_flux'])**2)
 
         # KL divergence
         kld = -0.5 * torch.sum(1 + result['encoding_logvar'] -
@@ -956,7 +967,9 @@ class ParsnipModel(nn.Module):
                 batch_predictions[f's{idx+1}_error'] = encoding_err[:, 2 + idx]
 
             # Calculate other features
-            time, flux, fluxerr, weight = result['compare_data'].permute(1, 0, 2)
+            time = result['time']
+            flux = result['obs_flux']
+            fluxerr = result['obs_fluxerr']
 
             fluxerr_mask = fluxerr == 0
             fluxerr[fluxerr_mask] = -1.
@@ -1136,6 +1149,52 @@ class ParsnipModel(nn.Module):
         )
 
         return model_spectra[..., 0]
+
+
+class ParsnipSource(sncosmo.Source):
+    def __init__(self, model):
+        self._model = model
+
+        model_name = os.path.splitext(os.path.basename(model.path))[0]
+        self.name = f'parsnip_{model_name}'
+        self._param_names = (
+            ['amplitude', 'color']
+            + [f's{i}' for i in range(self._model.settings['latent_size'])]
+        )
+        self.param_names_latex = (
+            ['A', 'c'] + [f's_{i}' for i in range(self._model.settings['latent_size'])]
+        )
+        self.version = 1
+
+        self._parameters = np.zeros(len(self._param_names))
+        self._parameters[0] = 1.
+
+    def _flux(self, phase, wave):
+        # Generate predictions at the given phase.
+        encoding = (torch.FloatTensor(self._parameters[2:])[None, :]
+                    .to(self._model.device))
+        phases = torch.FloatTensor(phase)[None, :].to(self._model.device)
+        color = torch.FloatTensor([self._parameters[1]]).to(self._model.device)
+        amplitude = (torch.FloatTensor([self._parameters[0]]).to(self._model.device))
+
+        model_spectra = self._model.decode_spectra(encoding, phases, color, amplitude)
+        model_spectra = model_spectra.detach().cpu().numpy()[0]
+
+        flux = interp1d(self._model.model_wave, model_spectra.T)(wave)
+
+        return flux
+
+    def minphase(self):
+        return -self._model.settings['time_window'] / 2.
+
+    def maxphase(self):
+        return self._model.settings['time_window'] / 2.
+
+    def minwave(self):
+        return self._model.settings['min_wave']
+
+    def maxwave(self):
+        return self._model.settings['max_wave']
 
 
 load_model = ParsnipModel.load

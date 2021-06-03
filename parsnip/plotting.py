@@ -8,7 +8,7 @@ import avocado
 from . import preprocess_light_curve
 
 
-def plot_light_curve(light_curve, model=None, count=100, show_bands=True,
+def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=True,
                      show_missing_bandpasses=False, percentile=68, ax=None, **kwargs):
     # TODO: make this work even if model is None, and make it work with both
     # preprocessed and not preprocessed light curves.
@@ -61,7 +61,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_bands=True,
             # Single prediction
             ax.plot(model_times, model_flux[band_idx], c=c, label=label)
             band_max_model = np.max(model_flux[band_idx])
-        elif show_bands:
+        elif show_uncertainty_bands:
             # Multiple predictions, show error bands.
             percentile_offset = (100 - percentile) / 2.
             flux_median = np.median(model_flux[:, band_idx], axis=0)
