@@ -667,7 +667,6 @@ class ParsnipModel(nn.Module):
         return encoding_mu, encoding_logvar
 
     def decode_spectra(self, encoding, phases, color, amplitude=None):
-        # TODO: Handle sidereal time properly
         scale_phases = phases / (self.settings['time_window'] // 2)
 
         repeat_encoding = encoding[:, :, None].expand((-1, -1, scale_phases.shape[1]))
@@ -1208,11 +1207,12 @@ class ParsnipSncosmoSource(sncosmo.Source):
         # Generate predictions at the given phase.
         encoding = (torch.FloatTensor(self._parameters[2:])[None, :]
                     .to(self._model.device))
-        phases = torch.FloatTensor(phase)[None, :].to(self._model.device)
+        phase = phase / SIDEREAL_SCALE
+        phase = torch.FloatTensor(phase)[None, :].to(self._model.device)
         color = torch.FloatTensor([self._parameters[1]]).to(self._model.device)
         amplitude = (torch.FloatTensor([self._parameters[0]]).to(self._model.device))
 
-        model_spectra = self._model.decode_spectra(encoding, phases, color, amplitude)
+        model_spectra = self._model.decode_spectra(encoding, phase, color, amplitude)
         model_spectra = model_spectra.detach().cpu().numpy()[0]
 
         flux = interp1d(self._model.model_wave, model_spectra.T)(wave)
