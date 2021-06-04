@@ -18,7 +18,7 @@ from torch import nn, optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from .light_curve import preprocess_light_curve
+from .light_curve import preprocess_light_curve, grid_to_time, SIDEREAL_SCALE
 from .utils import frac_to_mag
 from .settings import parse_settings
 
@@ -355,41 +355,40 @@ class ParsnipModel(nn.Module):
             # Convert the table to a numpy recarray. This is much faster to work with.
             data = lc.as_array()
 
+            # Make a copy of the metadata to work off of.
+            meta = lc.meta.copy(use_cache=not as_table)
+
             # Randomly drop observations and make a copy of the light curve.
             drop_frac = np.random.uniform(0, 0.5)
-            mask = np.random.rand(len(data)) < drop_frac
+            mask = np.random.rand(len(data)) > drop_frac
             data = data[mask]
 
             # Shift the time randomly.
             time_shift = np.round(
                 np.random.normal(0., self.settings['time_sigma'])
             ).astype(int)
-            data['time'] -= time_shift
+            meta['parsnip_reference_time'] += time_shift / SIDEREAL_SCALE
+            data['grid_time'] -= time_shift
             data['time_index'] -= time_shift
-
-            # Scale the amplitude randomly.
-            amp_scale = np.exp(np.random.normal(0, 0.5))
-            data['flux'] /= amp_scale
-            data['fluxerr'] /= amp_scale
 
             # Add noise to the observations
             if np.random.rand() < 0.5 and len(data) > 0:
                 # Choose an overall scale for the noise from a lognormal
                 # distribution.
-                noise_scale = np.random.lognormal(-4., 1.)
+                noise_scale = np.random.lognormal(-4., 1.) * meta['parsnip_scale']
 
                 # Choose the noise levels for each observation from a lognormal
                 # distribution.
                 noise_sigmas = np.random.lognormal(np.log(noise_scale), 1., len(data))
 
                 # Add the noise to the observations.
-                data['flux'] += np.random.normal(0., noise_sigmas)
+                noise = np.random.normal(0., noise_sigmas)
+                data['flux'] += noise
                 data['fluxerr'] = np.sqrt(data['fluxerr']**2 + noise_sigmas**2)
 
-            # Update the metadata
-            meta = lc.meta.copy(use_cache=not as_table)
-            meta['augment_time_shift'] = time_shift
-            meta['augment_scale'] = amp_scale
+            # Scale the amplitude that we input to the model randomly.
+            amp_scale = np.exp(np.random.normal(0, 0.5))
+            meta['parsnip_scale'] *= amp_scale
 
             # Convert back to an astropy Table if desired. This is somewhat slow, so we
             # skip it internally when training the model.
@@ -432,6 +431,12 @@ class ParsnipModel(nn.Module):
             mask = (lc_data['time_index'] >= 0) & (lc_data['time_index'] <
                                                    self.settings['time_window'])
             lc_data = lc_data[mask]
+
+            # Scale the flux and fluxerr appropriately. Note that applying the mask
+            # makes a copy of the array, so this won't affect the original data.
+            lc_data['flux'] /= lc_meta['parsnip_scale']
+            lc_data['fluxerr'] /= lc_meta['parsnip_scale']
+
             data.append(lc_data)
 
             # Batch indices
@@ -445,7 +450,7 @@ class ParsnipModel(nn.Module):
             # Stack all of the data that will be used for comparisons and convert it to
             # a torch tensor.
             obj_compare_data = torch.FloatTensor(np.vstack([
-                lc_data['time'],
+                lc_data['grid_time'],
                 lc_data['flux'],
                 lc_data['fluxerr'],
                 compare_weights,
@@ -1150,8 +1155,38 @@ class ParsnipModel(nn.Module):
 
         return model_spectra[..., 0]
 
+    def predict_sncosmo(self, light_curve, sample=False):
+        """Package the predictions for a light curve as an sncosmo model."""
+        if not light_curve.meta.get('parsnip_preprocessed', False):
+            light_curve = preprocess_light_curve(light_curve, self.settings)
 
-class ParsnipSource(sncosmo.Source):
+        # Run through the model to predict parameters.
+        result = self.forward([light_curve], sample=sample, to_numpy=True)
+
+        # Build the sncosmo model.
+        model = sncosmo.Model(source=ParsnipSncosmoSource(self))
+
+        meta = light_curve.meta
+        model['z'] = meta['redshift']
+        model['t0'] = grid_to_time(result['ref_times'][0],
+                                   meta['parsnip_reference_time'])
+        model['color'] = result['color'][0]
+
+        # Note: ZP of amplitude is 25, and we use an internal offset of 20 for building
+        # the model so that things are close to 1. Combined, that means that we need to
+        # apply an offset of 45 mag when calculating the amplitude for sncosmo.
+        model['amplitude'] = (
+            light_curve.meta['parsnip_scale'] * result['amplitude'][0]
+            * 10**(-0.4 * 45)
+        )
+
+        for i in range(self.settings['latent_size']):
+            model[f's{i}'] = result['encoding'][0, i]
+
+        return model
+
+
+class ParsnipSncosmoSource(sncosmo.Source):
     def __init__(self, model):
         self._model = model
 
@@ -1185,10 +1220,12 @@ class ParsnipSource(sncosmo.Source):
         return flux
 
     def minphase(self):
-        return -self._model.settings['time_window'] / 2.
+        return (-self._model.settings['time_window'] // 2
+                - self._model.settings['time_pad'])
 
     def maxphase(self):
-        return self._model.settings['time_window'] / 2.
+        return (self._model.settings['time_window'] // 2
+                + self._model.settings['time_pad'])
 
     def minwave(self):
         return self._model.settings['min_wave']

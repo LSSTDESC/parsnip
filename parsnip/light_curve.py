@@ -85,7 +85,7 @@ def preprocess_light_curve(light_curve, settings):
         (time_indices >= -settings['time_pad'])
         & (time_indices < settings['time_window'] + settings['time_pad'])
     )
-    new_lc['time'] = grid_times
+    new_lc['grid_time'] = grid_times
     new_lc['time_index'] = time_indices
 
     # Correct background levels for bands that need it.
@@ -126,9 +126,6 @@ def preprocess_light_curve(light_curve, settings):
         scale = np.max(new_lc['flux'][s2n_mask])
     else:
         scale = np.max(new_lc['flux'])
-
-    new_lc['flux'] /= scale
-    new_lc['fluxerr'] /= scale
 
     new_lc.meta['parsnip_reference_time'] = reference_time
     new_lc.meta['parsnip_scale'] = scale

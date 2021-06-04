@@ -5,12 +5,11 @@ import itertools
 import numpy as np
 import avocado
 
-from . import preprocess_light_curve
+from .light_curve import preprocess_light_curve, grid_to_time
 
 
 def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=True,
                      show_missing_bandpasses=False, percentile=68, ax=None, **kwargs):
-    # TODO: for unpreprocessed light curves, show the model in the original units.
     if not light_curve.meta.get('parsnip_preprocessed', False) and model is not None:
         light_curve = preprocess_light_curve(light_curve, model.settings)
 
@@ -28,8 +27,12 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         c = avocado.get_band_plot_color(band_name)
         marker = avocado.get_band_plot_marker(band_name)
 
-        ax.errorbar(band_data['time'], band_data['flux'], band_data['fluxerr'],
-                    fmt='o', c=c, label=band_name, elinewidth=1, marker=marker)
+        band_time = band_data['time']
+        band_flux = band_data['flux']
+        band_fluxerr = band_data['fluxerr']
+
+        ax.errorbar(band_time, band_flux, band_fluxerr, fmt='o', c=c, label=band_name,
+                    elinewidth=1, marker=marker)
 
         used_bandpasses.append(band_name)
 
@@ -40,6 +43,10 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         model_times, model_flux, model_result = model.predict_light_curve(
             light_curve, count, **kwargs
         )
+
+        model_times = grid_to_time(model_times,
+                                   light_curve.meta['parsnip_reference_time'])
+        model_flux = model_flux * light_curve.meta['parsnip_scale']
 
         for band_idx, band_name in enumerate(model.settings['bands']):
             if band_name not in used_bandpasses and not show_missing_bandpasses:
