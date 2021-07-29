@@ -1,0 +1,55 @@
+#!/usr/bin/env python
+import os
+import sys
+import lcdata
+import argparse
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Build a PLAsTiCC dataset to train on. The full dataset is too big '
+        'to fit in memory, so we work with only part of it. This script creates a '
+        'dataset that contains all of the training and DDF light curves, and 10% of '
+        'the WFD light curves',
+        argument_default=argparse.SUPPRESS
+    )
+
+    parser.add_argument('data_directory', default='./data/', nargs='?',
+                        help='Default: ./data/')
+
+    args = parser.parse_args()
+
+    basedir = args.data_directory
+
+    train_path = os.path.join(basedir, 'plasticc_train.h5')
+    test_path = os.path.join(basedir, 'plasticc_test.h5')
+    out_path = os.path.join(basedir, 'plasticc_combined.h5')
+
+    if not os.path.exists(train_path) or not os.path.exists(test_path):
+        print(f"PLAsTiCC dataset not found in directory '{basedir}'. Download it by "
+              "running lcdata_download_plasticc")
+        sys.exit()
+
+    if os.path.exists(out_path):
+        print(f"PLAsTiCC combined dataset already exists at '{out_path}'.")
+        sys.exit()
+
+    print("Loading PLAsTiCC training data...")
+    plasticc_train = lcdata.read_hdf5(train_path)
+
+    print("Loading PLAsTiCC test metadata...")
+    plasticc_test = lcdata.read_hdf5(test_path, in_memory=False)
+
+    print("Loading DDF light curves...")
+    plasticc_ddf = plasticc_test[plasticc_test.meta['ddf_bool'] > 0].load()
+
+    print("Loading 10% of the WFD light curves...")
+    chunk_size = len(plasticc_test) // 10
+    plasticc_wfd = plasticc_test[5*chunk_size:6*chunk_size].load()
+
+    plasticc_combined = plasticc_train + plasticc_ddf + plasticc_wfd
+
+    print("Writing out combined dataset.")
+    plasticc_combined.write_hdf5(out_path)
+
+    print(f"Done! Combined dataset now available at '{out_path}'.")
