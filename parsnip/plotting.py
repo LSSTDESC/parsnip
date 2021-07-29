@@ -5,11 +5,12 @@ import itertools
 import numpy as np
 import avocado
 
-from .light_curve import preprocess_light_curve, grid_to_time
+from .light_curve import preprocess_light_curve
 
 
 def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=True,
-                     show_missing_bandpasses=False, percentile=68, ax=None, **kwargs):
+                     show_missing_bandpasses=False, percentile=68, normalize_time=False,
+                     normalize_flux=False, ax=None, **kwargs):
     if not light_curve.meta.get('parsnip_preprocessed', False) and model is not None:
         light_curve = preprocess_light_curve(light_curve, model.settings)
 
@@ -31,6 +32,13 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         band_flux = band_data['flux']
         band_fluxerr = band_data['fluxerr']
 
+        if normalize_time:
+            band_time = band_time - light_curve.meta['parsnip_reference_time']
+
+        if normalize_flux:
+            band_flux = band_flux / light_curve.meta['parsnip_scale']
+            band_fluxerr = band_fluxerr / light_curve.meta['parsnip_scale']
+
         ax.errorbar(band_time, band_flux, band_fluxerr, fmt='o', c=c, label=band_name,
                     elinewidth=1, marker=marker)
 
@@ -44,9 +52,11 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
             light_curve, count, **kwargs
         )
 
-        model_times = grid_to_time(model_times,
-                                   light_curve.meta['parsnip_reference_time'])
-        model_flux = model_flux * light_curve.meta['parsnip_scale']
+        if normalize_time:
+            model_times = model_times - light_curve.meta['parsnip_reference_time']
+
+        if normalize_flux:
+            model_flux = model_flux / light_curve.meta['parsnip_scale']
 
         for band_idx, band_name in enumerate(model.settings['bands']):
             if band_name not in used_bandpasses and not show_missing_bandpasses:
@@ -87,8 +97,16 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         ax.set_ylim(-0.2 * max_model, 1.2 * max_model)
 
     ax.legend()
-    ax.set_xlabel('Time (days)')
-    ax.set_ylabel('Flux')
+
+    if normalize_time:
+        ax.set_xlabel('Relative Time (days)')
+    else:
+        ax.set_xlabel('Time (days)')
+
+    if normalize_flux:
+        ax.set_ylabel('Normalized Flux')
+    else:
+        ax.set_ylabel('Flux')
 
 
 def plot_spectrum(model, light_curve, time, count=100, show_bands=True, percentile=68,
