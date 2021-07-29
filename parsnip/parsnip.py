@@ -18,7 +18,8 @@ from torch import nn, optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from .light_curve import preprocess_light_curve, grid_to_time, SIDEREAL_SCALE
+from .light_curve import preprocess_light_curve, grid_to_time, time_to_grid, \
+    SIDEREAL_SCALE
 from .utils import frac_to_mag
 from .settings import parse_settings
 
@@ -1079,14 +1080,17 @@ class ParsnipModel(nn.Module):
         predictions = pd.concat(predictions)
         return predictions
 
-    def _predict_single(self, lc, pred_times, pred_bands, count):
-        pred_times = torch.FloatTensor(pred_times)[None, :].to(self.device)
+    def _predict(self, lc, pred_times, pred_bands, count):
+        # Convert given times to our internal times.
+        grid_times = time_to_grid(pred_times, lc.meta['parsnip_reference_time'])
+
+        grid_times = torch.FloatTensor(grid_times)[None, :].to(self.device)
         pred_bands = torch.LongTensor(pred_bands)[None, :].to(self.device)
 
         if count is not None:
             # Predict multiple light curves
             light_curves = [lc] * count
-            pred_times = pred_times.repeat(count, 1)
+            grid_times = grid_times.repeat(count, 1)
             pred_bands = pred_bands.repeat(count, 1)
         else:
             light_curves = [lc]
@@ -1101,7 +1105,7 @@ class ParsnipModel(nn.Module):
             result['encoding'],
             result['ref_times'],
             result['color'],
-            pred_times,
+            grid_times,
             redshifts,
             pred_bands,
             result['amplitude'],
@@ -1117,12 +1121,16 @@ class ParsnipModel(nn.Module):
 
         cpu_result = {k: v.detach().cpu().numpy() for k, v in result.items()}
 
+        # Scale everything to the original light curve scale.
+        model_flux *= lc.meta['parsnip_scale']
+        model_spectra *= lc.meta['parsnip_scale']
+
         return model_flux, model_spectra, cpu_result
 
-    def predict_light_curve(self, light_curve, count=None, sampling=1., pad=0.):
+    def predict_light_curve(self, light_curve, count=None, sampling=1., pad=50.):
         # Figure out where to sample the light curve
-        min_time = -self.settings['time_window'] / 2. - pad
-        max_time = self.settings['time_window'] / 2. + pad
+        min_time = np.min(light_curve['time']) - pad
+        max_time = np.max(light_curve['time']) + pad
         model_times = np.arange(min_time, max_time + sampling, sampling)
 
         band_indices = np.arange(len(self.settings['bands']))
@@ -1130,7 +1138,7 @@ class ParsnipModel(nn.Module):
         pred_times = np.tile(model_times, len(band_indices))
         pred_bands = np.repeat(band_indices, len(model_times))
 
-        model_flux, model_spectra, model_result = self._predict_single(
+        model_flux, model_spectra, model_result = self._predict(
             light_curve, pred_times, pred_bands, count
         )
 
@@ -1148,7 +1156,7 @@ class ParsnipModel(nn.Module):
         pred_times = [time]
         pred_bands = [0]
 
-        model_flux, model_spectra, model_result = self._predict_single(
+        model_flux, model_spectra, model_result = self._predict(
             light_curve, pred_times, pred_bands, count
         )
 
