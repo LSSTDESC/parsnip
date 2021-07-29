@@ -11,10 +11,9 @@ if __name__ == '__main__':
 
     parser = parsnip.build_default_argparse('Train a ParSNIP model.')
 
-    parser.add_argument('model')
-    parser.add_argument('dataset', nargs='+')
+    parser.add_argument('model_path')
+    parser.add_argument('dataset_paths', nargs='+')
 
-    parser.add_argument('--no_augment', action='store_false', dest='augment')
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--split_train_test', action='store_true')
@@ -25,32 +24,28 @@ if __name__ == '__main__':
     # Parse the arguments
     args = vars(parser.parse_args())
 
-    # Name of the dataset
-    model_name = args['model']
-
-    # Figure out if we have already trained a model with this name.
-    path = parsnip.ParsnipModel.get_model_path(model_name)
-    if os.path.exists(path):
+    # Figure out if we have already trained a model at this path.
+    model_path = args['model_path']
+    if os.path.exists(model_path):
         if args['overwrite']:
-            print(f"Model {model_name} already exists, overwriting!")
+            print(f"Model {model_path} already exists, overwriting!")
         else:
-            print(f"Model {model_name} already exists, skipping!")
+            print(f"Model {model_path} already exists, skipping!")
             sys.exit()
 
     # Load the dataset(s).
-    dataset = parsnip.load_datasets(args['dataset'])
+    dataset = parsnip.load_datasets(args['dataset_paths'])
 
     model = parsnip.ParsnipModel(
-        model_name,
-        dataset.get_bands(),
+        model_path,
+        parsnip.get_bands(dataset),
         device=args['device'],
         threads=args['threads'],
-        augment=args['augment'],
         settings=args,
         ignore_unknown_settings=True
     )
 
-    model.preprocess(dataset)
+    dataset = model.preprocess(dataset)
 
     if args['split_train_test']:
         train_dataset, test_dataset = parsnip.split_train_test(dataset)
@@ -76,5 +71,5 @@ if __name__ == '__main__':
     elapsed_time = (end_time - start_time) / 60.
 
     with open('./parsnip_results.log', 'a') as f:
-        print(f'{model_name} {model.epoch} {elapsed_time:.2f} {train_score:.4f} '
+        print(f'{model_path} {model.epoch} {elapsed_time:.2f} {train_score:.4f} '
               f'{test_score:.4f}', file=f)
