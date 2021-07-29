@@ -41,7 +41,10 @@ if __name__ == '__main__':
     plasticc_test = lcdata.read_hdf5(test_path, in_memory=False)
 
     print("Loading DDF light curves...")
-    plasticc_ddf = plasticc_test[plasticc_test.meta['ddf_bool'] > 0].load()
+    # The DDF light curves are all in the first chunk of the test dataset. Loading the
+    # first 1% of the dataset includes all of them.
+    chunk_size = len(plasticc_test) // 100
+    plasticc_ddf = plasticc_test[:chunk_size].load()
 
     print("Loading 10% of the WFD light curves...")
     chunk_size = len(plasticc_test) // 10
