@@ -28,9 +28,9 @@ if __name__ == '__main__':
     model_path = args['model_path']
     if os.path.exists(model_path):
         if args['overwrite']:
-            print(f"Model {model_path} already exists, overwriting!")
+            print(f"Model '{model_path}' already exists, overwriting!")
         else:
-            print(f"Model {model_path} already exists, skipping!")
+            print(f"Model '{model_path}' already exists, skipping!")
             sys.exit()
 
     # Load the dataset(s).

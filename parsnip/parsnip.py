@@ -3,7 +3,6 @@ import functools
 import multiprocessing
 import numpy as np
 import os
-import pandas as pd
 from scipy.interpolate import interp1d
 import sys
 
@@ -939,28 +938,66 @@ class ParsnipModel(nn.Module):
 
             self.epoch += 1
 
-    def predict_dataset(self, dataset, augment=False, sample=False):
-        print("TODO: handle luminosity properly for augmented datasets!")
+    def predict_dataset(self, dataset, augment=False):
+        """Generate predictions for a dataset
+
+        Parameters
+        ----------
+        dataset : `avocado.Dataset`
+            Dataset to generate predictions for.
+        augment : bool, optional
+            Whether to perform augmentation, False by default.
+
+        Returns
+        -------
+        predictions : `astropy.table.Table`
+            astropy Table with one row for each light curve and columns with each of the
+            predicted values.
+        """
         predictions = []
 
         loader = self.get_data_loader(dataset, augment=augment)
 
         for batch_lcs in loader:
             # Run the data through the model.
-            result = self.forward(batch_lcs, sample=sample, to_numpy=True)
+            result = self.forward(batch_lcs, to_numpy=True, sample=False)
+
+            # Pull out the reference time and reference scale. Note that if we are
+            # working with an augmented dataset, get_data_loader doesn't construct a
+            # full astropy Table to save time. Handle either case.
+            parsnip_reference_time = []
+            parsnip_scale = []
+            for lc in batch_lcs:
+                if isinstance(lc, astropy.table.Table):
+                    lc_meta = lc.meta
+                else:
+                    lc_data, lc_meta = lc
+                parsnip_reference_time.append(lc_meta['parsnip_reference_time'])
+                parsnip_scale.append(lc_meta['parsnip_scale'])
+            parsnip_reference_time = np.array(parsnip_reference_time)
+            parsnip_scale = np.array(parsnip_scale)
 
             encoding_mu = result['encoding_mu']
             encoding_err = np.sqrt(np.exp(result['encoding_logvar']))
 
-            amp_scales = np.array([i.meta['parsnip_scale'] for i in batch_lcs])
-            amplitude_mu = result['amplitude_mu'] / amp_scales
-            amplitude_error = np.sqrt(np.exp(result['amplitude_logvar'])) / amp_scales
+            # Update the reference time.
+            reference_time = (
+                parsnip_reference_time
+                + encoding_mu[:, 0] * self.settings['time_sigma'] / SIDEREAL_SCALE
+            )
+            reference_time_error = (
+                encoding_err[:, 0] * self.settings['time_sigma'] / SIDEREAL_SCALE
+            )
+
+            amplitude_mu = result['amplitude_mu'] * parsnip_scale
+            amplitude_error = (
+                np.sqrt(np.exp(result['amplitude_logvar'])) * parsnip_scale
+            )
 
             # Pull out the keys that we care about saving.
             batch_predictions = {
-                'reference_time': encoding_mu[:, 0] * self.settings['time_sigma'],
-                'reference_time_error': (encoding_err[:, 0] *
-                                         self.settings['time_sigma']),
+                'reference_time': reference_time,
+                'reference_time_error': reference_time_error,
                 'color': encoding_mu[:, 1] * self.settings['color_sigma'],
                 'color_error': encoding_err[:, 1] * self.settings['color_sigma'],
                 'amplitude': amplitude_mu,
@@ -971,51 +1008,12 @@ class ParsnipModel(nn.Module):
                 batch_predictions[f's{idx+1}'] = encoding_mu[:, 2 + idx]
                 batch_predictions[f's{idx+1}_error'] = encoding_err[:, 2 + idx]
 
-            # Calculate other features
-            time = result['time']
-            flux = result['obs_flux']
-            fluxerr = result['obs_fluxerr']
+            predictions.append(astropy.table.Table(batch_predictions))
 
-            fluxerr_mask = fluxerr == 0
-            fluxerr[fluxerr_mask] = -1.
-
-            # Signal-to-noise
-            s2n = flux / fluxerr
-            s2n[fluxerr_mask] = 0.
-            batch_predictions['total_s2n'] = np.sqrt(np.sum(s2n**2, axis=1))
-
-            # Number of observations
-            batch_predictions['count'] = np.sum(~fluxerr_mask, axis=1)
-
-            # Number of observations with signal-to-noise above some threshold.
-            batch_predictions['count_s2n_3'] = np.sum(s2n > 3, axis=1)
-            batch_predictions['count_s2n_5'] = np.sum(s2n > 5, axis=1)
-
-            # Number of observations with signal-to-noise above some threshold in
-            # different time windows.
-            reference_time = batch_predictions['reference_time'][:, None]
-            mask_pre = time < reference_time - 50.
-            mask_rise = (time >= reference_time - 50.) & (time < reference_time)
-            mask_fall = (time >= reference_time) & (time < reference_time + 50.)
-            mask_post = (time >= reference_time + 50.)
-            mask_s2n = s2n > 3
-            batch_predictions['count_s2n_3_pre'] = np.sum(mask_pre & mask_s2n, axis=1)
-            batch_predictions['count_s2n_3_rise'] = np.sum(mask_rise & mask_s2n, axis=1)
-            batch_predictions['count_s2n_3_fall'] = np.sum(mask_fall & mask_s2n, axis=1)
-            batch_predictions['count_s2n_3_post'] = np.sum(mask_post & mask_s2n, axis=1)
-
-            predictions.append(pd.DataFrame(batch_predictions))
-
-        predictions = pd.concat(predictions, ignore_index=True)
-
-        # Add in the preprocessed scale for the amplitude
-        scales = np.array([i.preprocess_data['scale'] for i in dataset.light_curves])
-        predictions['amplitude'] *= scales
-        predictions['amplitude_error'] *= scales
+        predictions = astropy.table.vstack(predictions, 'exact')
 
         # Merge in the metadata
-        predictions.index = dataset.metadata.index
-        predictions = pd.concat([dataset.metadata, predictions], axis=1)
+        predictions = astropy.table.hstack([dataset.meta, predictions], 'exact')
 
         # Estimate the absolute luminosity (assuming a zeropoint of 25).
         amplitudes = predictions['amplitude'].copy()
@@ -1039,7 +1037,7 @@ class ParsnipModel(nn.Module):
 
         return predictions
 
-    def predict_dataset_augmented(self, dataset, augments=10, sample=False):
+    def predict_dataset_augmented(self, dataset, augments=10):
         """Generate predictions for a dataset with augmentation
 
         This will first generate predictions for the dataset without augmentation,
@@ -1058,26 +1056,26 @@ class ParsnipModel(nn.Module):
 
         Returns
         -------
-        predictions : `pandas.DataFrame`
-            Dataframe with one row for each light curve and columns with each of the
+        predictions : `astropy.table.Table`
+            astropy Table with one row for each light curve and columns with each of the
             predicted values.
         """
         # First pass without augmentation.
-        pred = self.predict_dataset(dataset, sample=sample)
-        pred['original_object_id'] = pred.index
+        pred = self.predict_dataset(dataset)
+        pred['original_object_id'] = pred['object_id']
         pred['augmented'] = False
 
         predictions = [pred]
 
         # Next passes with augmentation.
         for idx in tqdm(range(augments), file=sys.stdout):
-            pred = self.predict_dataset(dataset, sample=sample, augment=True)
-            pred['original_object_id'] = pred.index
+            pred = self.predict_dataset(dataset, augment=True)
+            pred['original_object_id'] = pred['object_id']
             pred['augmented'] = True
-            pred.index = [i + f'_aug_{idx+1}' for i in pred.index]
+            pred['object_id'] = [i + f'_aug_{idx+1}' for i in pred['object_id']]
             predictions.append(pred)
 
-        predictions = pd.concat(predictions)
+        predictions = astropy.table.vstack(predictions, 'exact')
         return predictions
 
     def _predict(self, lc, pred_times, pred_bands, count):
