@@ -57,7 +57,7 @@ if __name__ == '__main__':
 
     # Save the score to a file for quick comparisons. If we have a small dataset,
     # repeat the dataset several times when calculating the score.
-    rounds = int(np.ceil(25000 / len(train_dataset.objects)))
+    rounds = int(np.ceil(25000 / len(train_dataset)))
 
     train_score = model.score(train_dataset, rounds=rounds)
     if args['use_train_test']:
