@@ -1028,7 +1028,7 @@ class ParsnipModel(nn.Module):
         predictions['luminosity'] = luminosity
 
         # Luminosity uncertainty
-        frac_diff = predictions['amplitude_error'] / predictions['amplitude']
+        frac_diff = predictions['amplitude_error'] / amplitudes
         frac_diff[amplitude_mask] = 0.5
         frac_diff[frac_diff > 0.5] = 0.5
         int_mag_err = frac_to_mag(frac_diff)
