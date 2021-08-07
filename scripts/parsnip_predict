@@ -74,8 +74,9 @@ if __name__ == '__main__':
     # Save the predictions
     os.makedirs(os.path.dirname(predictions_path), exist_ok=True)
 
-    # By default, assume that we are writing to HDF5 format. In this case, serialize the
-    # table to preserve masked columns.
+    # By default, assume that we are writing to HDF5 format. In this case, we serialize
+    # the table to preserve masked columns and data types. Note that the output will
+    # only be able to be read by astropy.table.Table.
     try:
         predictions.write(predictions_path, overwrite=True, serialize_meta=True,
                           path='/predictions')
