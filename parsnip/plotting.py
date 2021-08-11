@@ -6,6 +6,7 @@ import numpy as np
 import avocado
 
 from .light_curve import preprocess_light_curve
+from .classifier import extract_top_classifications
 
 
 def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=True,
@@ -137,32 +138,33 @@ def plot_spectrum(model, light_curve, time, count=100, show_bands=True, percenti
     ax.set_ylabel('Flux')
 
 
-def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=None):
+def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=None,
+                          verbose=True):
     """Plot a confusion matrix
 
     Adapted from example that used to be at
     http://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html
     """
-    if len(classifications.columns) == 2 and classifications.columns[0] == 'Other':
+    true_types = np.char.decode(predictions['type'])
+    predicted_types = extract_top_classifications(classifications)
+
+    if len(classifications.columns) == 3 and classifications.colnames[2] == 'Other':
         # Single class classification. All labels other than the target one are grouped
         # as "Other".
-        target_label = classifications.columns[1]
-        match_labels = predictions['label'] == target_label
-        labels = match_labels.replace({False: 'Other', True: target_label})
-    else:
-        labels = predictions['label']
+        single_type = classifications.colnames[1]
+        true_types[true_types != single_type] = 'Other'
 
-    class_names = classifications.columns
+    type_names = classifications.colnames[1:]
 
     plt.figure(figsize=figsize, constrained_layout=True)
-    cm = confusion_matrix(labels, classifications.idxmax(axis=1),
-                          labels=class_names, normalize='true')
+    cm = confusion_matrix(true_types, predicted_types, labels=type_names,
+                          normalize='true')
 
     im = plt.imshow(cm, interpolation='nearest',
                     cmap=plt.cm.Blues, vmin=0, vmax=1)
-    tick_marks = np.arange(len(class_names))
-    plt.xticks(tick_marks, class_names, rotation=60, ha='right')
-    plt.yticks(tick_marks, class_names)
+    tick_marks = np.arange(len(type_names))
+    plt.xticks(tick_marks, type_names, rotation=60, ha='right')
+    plt.yticks(tick_marks, type_names)
 
     fmt = '.2f'
     thresh = cm.max() / 2.
@@ -171,8 +173,8 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
                  horizontalalignment="center",
                  color="white" if cm[i, j] > thresh else "black")
 
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
+    plt.ylabel('True Type')
+    plt.xlabel('Predicted Type')
     if title is not None:
         plt.title(title)
 
@@ -182,6 +184,12 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="4%", pad=0.25)
     plt.colorbar(im, cax=cax, label='Fraction of objects')
+
+    if verbose:
+        # Print out stats.
+        print("Macro averaged completeness (Villar et al. 2020): "
+              f"{np.diag(cm).mean():.4f}")
+        print(f"Fraction correct: {np.mean(true_types == predicted_types):.4f}")
 
 
 def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx3=None,

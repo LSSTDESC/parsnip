@@ -1,9 +1,42 @@
 from sklearn.model_selection import StratifiedKFold
+import astropy.table
 import lightgbm
 import numpy as np
 import os
-import pandas as pd
 import pickle
+
+
+def extract_top_classifications(classifications):
+    """Extract the top classification for each row a classifications Table.
+
+    This is a bit complicated when working with astropy Tables.
+    """
+    types = classifications.colnames[1:]
+    dtype = classifications[types[0]].dtype
+    probabilities = classifications[types].as_array().view((dtype, len(types)))
+    top_types = np.array(types)[probabilities.argmax(axis=1)]
+
+    return top_types
+
+
+def weighted_multi_logloss(true_types, classifications):
+    """Calculate a weighted log loss metric.
+
+    This is the metric used for the PLAsTiCC challenge (with class weights set to 1)
+    as described in Malz et al. 2019
+    """
+    total_logloss = 0.
+    unique_types = np.unique(true_types)
+    for type_name in unique_types:
+        type_mask = true_types == type_name
+        type_predictions = classifications[type_name][type_mask]
+        type_loglosses = (
+            -np.log(type_predictions)
+            / len(unique_types)
+            / len(type_predictions)
+        )
+        total_logloss += np.sum(type_loglosses)
+    return total_logloss
 
 
 class Classifier():
@@ -24,6 +57,9 @@ class Classifier():
             'reference_time_error',
         ]
 
+    def extract_features(self, predictions):
+        return np.array([predictions[i].data for i in self.keys]).T
+
     def train(self, predictions, num_folds=10, labels=None, target_label=None,
               reweight=True, min_child_weight=1000.):
         """Train a classifier on the predictions from a VAE model."""
@@ -33,24 +69,27 @@ class Classifier():
 
         if labels is None:
             # Use default labels
-            labels = predictions['label']
+            labels = predictions['type']
 
         if target_label is not None:
             # Single class classification
             labels = labels == target_label
-            class_names = np.array(['Other', target_label])
+            class_names = np.array([target_label, 'Other'])
+
+            numeric_labels = (~labels).astype(int)
         else:
             # Multi-class classification
             class_names = np.unique(labels)
 
-        # Assign numbers to the labels so that we can guarantee a consistent ordering.
-        label_map = {j: i for i, j in enumerate(class_names)}
-        numeric_labels = labels.replace(label_map)
+            # Assign numbers to the labels so that we can guarantee a consistent
+            # ordering.
+            label_map = {j: i for i, j in enumerate(class_names)}
+            numeric_labels = np.array([label_map[i] for i in labels])
 
         # Assign folds while making sure that we keep all augmentations of the same
         # object in the same fold.
         if num_folds > 1:
-            if 'augmented' in predictions:
+            if 'augmented' in predictions.colnames:
                 original_mask = ~predictions['augmented']
             else:
                 original_mask = np.ones(len(predictions), dtype=bool)
@@ -75,13 +114,15 @@ class Classifier():
 
         classifiers = []
 
-        features = predictions[self.keys]
+        features = self.extract_features(predictions)
 
         # Normalize by the class counts. We normalize so that the average weight is 1
         # across all objects, and so that the sum of weights for each class is the same.
         if reweight:
-            class_counts = numeric_labels.value_counts()
-            class_weights = np.mean(class_counts) / class_counts
+            count_names, class_counts = np.unique(numeric_labels, return_counts=True)
+            norm = np.mean(class_counts)
+            class_weights = {name: norm / count for name, count in zip(count_names,
+                                                                       class_counts)}
             weights = np.array([class_weights[i] for i in numeric_labels])
         else:
             weights = np.ones_like(numeric_labels)
@@ -113,13 +154,13 @@ class Classifier():
             fit_params = {"verbose": 100, "sample_weight": weights[train_index]}
 
             if num_folds > 1:
-                fit_params["eval_set"] = [(features[test_index].values,
+                fit_params["eval_set"] = [(features[test_index],
                                            numeric_labels[test_index])]
                 fit_params["eval_sample_weight"] = [weights[test_index]]
 
             classifier = lightgbm.LGBMClassifier(**lightgbm_params)
-            classifier.fit(features[train_index], numeric_labels[train_index],
-                           **fit_params)
+            classifier.fit(features[train_index],
+                           numeric_labels[train_index], **fit_params)
 
             classifiers.append(classifier)
 
@@ -137,11 +178,10 @@ class Classifier():
             # Only had a single fold, so do in sample predictions
             classifications = classifiers[0].predict_proba(features)
 
-        classifications = pd.DataFrame(
-            classifications,
-            index=predictions.index,
-            columns=class_names
-        )
+        classifications = astropy.table.hstack([
+            predictions['object_id'],
+            astropy.table.Table(classifications, names=class_names)
+        ])
 
         return classifications
 
@@ -151,7 +191,7 @@ class Classifier():
         If the classifier was trained with K-folding, we average the classification
         probabilities over all folds.
         """
-        features = predictions[self.keys]
+        features = self.extract_features(predictions)
 
         classifications = 0.
 
@@ -160,11 +200,10 @@ class Classifier():
 
         classifications /= len(self.classifiers)
 
-        classifications = pd.DataFrame(
-            classifications,
-            index=predictions.index,
-            columns=self.class_names
-        )
+        classifications = astropy.table.hstack([
+            predictions['object_id'],
+            astropy.table.Table(classifications, names=self.class_names)
+        ])
 
         return classifications
 
