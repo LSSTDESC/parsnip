@@ -1224,7 +1224,7 @@ class ParsnipModel(nn.Module):
         )
 
         for i in range(self.settings['latent_size']):
-            model[f's{i}'] = result['encoding'][0, i]
+            model[f's{i+1}'] = result['encoding'][0, i]
 
         return model
 
