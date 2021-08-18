@@ -1008,6 +1008,44 @@ class ParsnipModel(nn.Module):
                 batch_predictions[f's{idx+1}'] = encoding_mu[:, 2 + idx]
                 batch_predictions[f's{idx+1}_error'] = encoding_err[:, 2 + idx]
 
+            # Calculate other useful features.
+            time = result['time']
+            obs_flux = result['obs_flux']
+            obs_fluxerr = result['obs_fluxerr']
+            model_flux = result['model_flux']
+            fluxerr_mask = obs_fluxerr == 0
+            obs_fluxerr[fluxerr_mask] = -1.
+
+            # Signal-to-noise
+            s2n = obs_flux / obs_fluxerr
+            s2n[fluxerr_mask] = 0.
+            batch_predictions['total_s2n'] = np.sqrt(np.sum(s2n**2, axis=1))
+
+            # Number of observations
+            batch_predictions['count'] = np.sum(~fluxerr_mask, axis=1)
+
+            # Number of observations with signal-to-noise above some threshold.
+            batch_predictions['count_s2n_3'] = np.sum(s2n > 3, axis=1)
+            batch_predictions['count_s2n_5'] = np.sum(s2n > 5, axis=1)
+
+            # Number of observations with signal-to-noise above some threshold in
+            # different time windows.
+            reference_time = batch_predictions['reference_time'][:, None]
+            mask_pre = time < reference_time - 50.
+            mask_rise = (time >= reference_time - 50.) & (time < reference_time)
+            mask_fall = (time >= reference_time) & (time < reference_time + 50.)
+            mask_post = (time >= reference_time + 50.)
+            mask_s2n = s2n > 3
+            batch_predictions['count_s2n_3_pre'] = np.sum(mask_pre & mask_s2n, axis=1)
+            batch_predictions['count_s2n_3_rise'] = np.sum(mask_rise & mask_s2n, axis=1)
+            batch_predictions['count_s2n_3_fall'] = np.sum(mask_fall & mask_s2n, axis=1)
+            batch_predictions['count_s2n_3_post'] = np.sum(mask_post & mask_s2n, axis=1)
+
+            # Chi-square
+            all_chisq = (obs_flux - model_flux)**2 / obs_fluxerr**2
+            all_chisq[fluxerr_mask] = 0.
+            batch_predictions['model_chisq'] = np.sum(all_chisq, axis=1)
+
             predictions.append(astropy.table.Table(batch_predictions))
 
         predictions = astropy.table.vstack(predictions, 'exact')
