@@ -1,12 +1,12 @@
 from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec
 from sklearn.metrics import confusion_matrix
-import hashlib
 import itertools
 import numpy as np
 
 from .light_curve import preprocess_light_curve
 from .classifier import extract_top_classifications
+from .instruments import get_band_plot_color, get_band_plot_marker
 
 
 def _get_reference_time(light_curve):
@@ -19,96 +19,6 @@ def _get_reference_time(light_curve):
     else:
         # No estimate of the reference time. Just show the light curve as is.
         return 0.
-
-
-# Colors for plotting
-band_plot_colors = {
-    "lsstu": "C6",
-    "lsstg": "C4",
-    "lsstr": "C0",
-    "lssti": "C2",
-    "lsstz": "C3",
-    "lssty": "goldenrod",
-
-    "ps1::g": "C0",
-    "ps1::r": "C2",
-    "ps1::i": "C1",
-    "ps1::z": "C3",
-
-    "desg": "C4",
-    "desr": "C0",
-    "desi": "C2",
-    "desz": "C3",
-
-    "ztfg": "C0",
-    "ztfr": "C2",
-    "ztfi": "C1",
-}
-
-
-# Markers for plotting
-band_plot_markers = {
-    "lsstu": "o",
-    "lsstg": "v",
-    "lsstr": "^",
-    "lssti": "<",
-    "lsstz": ">",
-    "lssty": "s",
-
-    "ps1::g": "o",
-    "ps1::r": "^",
-    "ps1::i": "v",
-    "ps1::z": "p",
-
-    "desg": "v",
-    "desr": "^",
-    "desi": "<",
-    "desz": ">",
-
-    "ztfg": "o",
-    "ztfr": "^",
-    "ztfi": "v",
-}
-
-
-def get_band_plot_color(band):
-    """Return the plot color for a given band.
-
-    If the band does not yet have a color assigned to it, then a random color
-    will be assigned (in a systematic way).
-
-    Parameters
-    ----------
-    band : str
-        Name of the band to use.
-    """
-    if band in band_plot_colors:
-        return band_plot_colors[band]
-
-    # Systematic random colors. We use the hash of the band name.
-    # Note: hash() uses a random offset in python 3 so it isn't consistent
-    # between runs!
-    hasher = hashlib.md5()
-    hasher.update(band.encode("utf8"))
-    hex_color = "#%s" % hasher.hexdigest()[-6:]
-
-    band_plot_colors[band] = hex_color
-
-    return hex_color
-
-
-def get_band_plot_marker(band):
-    """Return the plot marker for a given band.
-
-    If the band does not yet have a marker assigned to it, then we use the
-    default circle.
-
-    Parameters
-    ----------
-    band : str
-        Name of the band to use.
-    """
-    return band_plot_markers.get(band, 'o')
 
 
 def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=True,
