@@ -2,6 +2,7 @@ import sncosmo
 import numpy as np
 from functools import reduce, lru_cache
 import lcdata
+import torch
 
 
 def parse_ps1(dataset):
@@ -315,3 +316,19 @@ def get_bands(dataset):
     sorted_bands = np.array(sorted(bands, key=get_band_effective_wavelength))
 
     return sorted_bands
+
+
+def parse_device(device):
+    """Figure out which device to use."""
+    # Figure out which device to run on.
+    if device == 'cpu':
+        # Requested CPU.
+        use_device = 'cpu'
+    elif torch.cuda.is_available():
+        # Requested GPU and it is available.
+        use_device = device
+    else:
+        print(f"WARNING: Device '{device}' not available, using 'cpu' instead.")
+        use_device = 'cpu'
+
+    return use_device

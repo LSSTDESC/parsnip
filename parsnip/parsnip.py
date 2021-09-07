@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 
 from .light_curve import preprocess_light_curve, grid_to_time, time_to_grid, \
     SIDEREAL_SCALE
-from .utils import frac_to_mag
+from .utils import frac_to_mag, parse_device
 from .settings import parse_settings
 
 
@@ -97,7 +97,7 @@ class ParsnipModel(nn.Module):
         self.threads = threads
 
         # Setup the device
-        self.device = self._parse_device(device)
+        self.device = parse_device(device)
         torch.set_num_threads(self.threads)
 
         # Setup the bands
@@ -127,25 +127,9 @@ class ParsnipModel(nn.Module):
         # Send the model weights to the desired device
         self.to(self.device, force=True)
 
-    @classmethod
-    def _parse_device(cls, device):
-        """Figure out which device to use."""
-        # Figure out which device to run on.
-        if device == 'cpu':
-            # Requested CPU.
-            use_device = 'cpu'
-        elif torch.cuda.is_available():
-            # Requested GPU and it is available.
-            use_device = device
-        else:
-            print(f"WARNING: Device '{device}' not available, using 'cpu' instead.")
-            use_device = 'cpu'
-
-        return use_device
-
     def to(self, device, force=False):
         """Send the model to the given device"""
-        new_device = self._parse_device(device)
+        new_device = parse_device(device)
 
         if self.device == new_device and not force:
             # Already on that device
@@ -168,21 +152,6 @@ class ParsnipModel(nn.Module):
         """Save the model"""
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         torch.save([self.settings, self.state_dict()], self.path)
-
-    @classmethod
-    def load(cls, path, device='cpu', threads=8):
-        """Load a model"""
-        # TODO: split this out as load_model, and put parse_device in utils.py
-
-        # Load the model data
-        use_device = cls._parse_device(device)
-        settings, state_dict = torch.load(path, use_device)
-
-        # Instantiate the model
-        model = cls(path, settings['bands'], use_device, threads, settings)
-        model.load_state_dict(state_dict)
-
-        return model
 
     def _setup_band_weights(self):
         """Setup the interpolation for the band weights used for photometry"""
@@ -1327,4 +1296,29 @@ class ParsnipSncosmoSource(sncosmo.Source):
         return self._model.settings['max_wave']
 
 
-load_model = ParsnipModel.load
+def load_model(path, device='cpu', threads=8):
+    """Load a ParSNIP model.
+
+    Parameters
+    ----------
+    path : str
+        Path to the model on disk
+    device : str, optional
+        Torch device to load the model to, by default 'cpu'
+    threads : int, optional
+        Number of threads to use, by default 8
+
+    Returns
+    -------
+    `ParsnipModel`
+        Loaded model
+    """
+    # Load the model data
+    use_device = parse_device(device)
+    settings, state_dict = torch.load(path, use_device)
+
+    # Instantiate the model
+    model = ParsnipModel(path, settings['bands'], use_device, threads, settings)
+    model.load_state_dict(state_dict)
+
+    return model
