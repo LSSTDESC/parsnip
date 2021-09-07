@@ -1,6 +1,5 @@
 import sncosmo
 import numpy as np
-import os
 from functools import reduce, lru_cache
 import lcdata
 
@@ -36,14 +35,8 @@ def parse_ztf(dataset):
     dataset = dataset[~dataset.meta['redshift'].isnull()]
 
     # Throw out observations with zero flux.
-    # TODO: Update this.
-    raise Exception("Can't handle zero flux observations!")
-    # if dataset.objects is not None:
-        # new_objects = []
-        # for obj in dataset.objects:
-            # obs = obj.observations[obj.observations['flux'] != 0.]
-            # new_objects.append(type(obj)(obj.meta, obs))
-        # dataset = avocado.Dataset.from_objects(dataset.name, new_objects)
+    print("WARNING: Some ZTF datasets replace lower limits with a flux of zero."
+          "This is bad, and is not currently supported!")
 
     # Clean up labels
     types = [str(i).replace(' ', '').replace('?', '') for i in dataset.meta['type']]
