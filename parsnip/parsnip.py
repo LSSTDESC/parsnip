@@ -839,7 +839,7 @@ class ParsnipModel(nn.Module):
 
         Parameters
         ----------
-        dataset : `avocado.Dataset`
+        dataset : `lcdata.Dataset`
             Dataset to run on
         rounds : int, optional
             Number of rounds to use for evaluation. VAEs are stochastic, so the loss
@@ -978,7 +978,7 @@ class ParsnipModel(nn.Module):
 
         Parameters
         ----------
-        dataset : `avocado.Dataset`
+        dataset : `lcdata.Dataset`
             Dataset to generate predictions for.
         augment : bool, optional
             Whether to perform augmentation, False by default.
@@ -1134,7 +1134,7 @@ class ParsnipModel(nn.Module):
 
         Parameters
         ----------
-        dataset : `avocado.Dataset`
+        dataset : `lcdata.Dataset`
             Dataset to generate predictions for.
         augments : int, optional
             Number of times to augment the dataset, by default 10
