@@ -1,4 +1,6 @@
-# ParSNIP: A Generative Model of Transient Light Curves
+# ParSNIP
+
+A Generative Model of Transient Light Curves
 
 ## About
 
