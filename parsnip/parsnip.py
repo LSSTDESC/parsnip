@@ -10,6 +10,7 @@ from astropy.cosmology import Planck18
 import astropy.table
 import extinction
 import sncosmo
+import lcdata
 
 import torch
 import torch.utils.data
@@ -780,6 +781,7 @@ class ParsnipModel(nn.Module):
             'obs_flux': compare_data[:, 1],
             'obs_fluxerr': compare_data[:, 2],
             'obs_weight': compare_data[:, 3],
+            'band_indices': band_indices,
             'model_flux': model_flux,
             'model_spectra': model_spectra,
             'encoding_mu': encoding_mu,
@@ -938,6 +940,39 @@ class ParsnipModel(nn.Module):
 
             self.epoch += 1
 
+    def predict(self, light_curves, augment=False):
+        """Generate predictions for a light curve or set of light curves.
+
+        Parameters
+        ----------
+        light_curves : `astropy.table.Table` or List[`astropy.table.Table`]
+            Light curve(s) to generate predictions for.
+
+        Returns
+        -------
+        `astropy.table.Table` or dict
+            Table (for multiple light curves) or dict (for a single light curve)
+            containing the predictions.
+        """
+        # Check if we have a list of light curves or a single one and handle it
+        # appropriately.
+        if isinstance(light_curves, astropy.table.Table):
+            # Single object. Wrap it so that we can process it as an array. We'll unwrap
+            # it at the end.
+            single = True
+            light_curves = [light_curves]
+        else:
+            single = False
+
+        # Wrap the light curves in an lcdata dataset and use that to process them.
+        dataset = lcdata.from_light_curves(light_curves)
+        predictions = self.predict_dataset(dataset, augment=augment)
+
+        if single:
+            return dict(zip(predictions[0].keys(), predictions[0].values()))
+        else:
+            return predictions
+
     def predict_dataset(self, dataset, augment=False):
         """Generate predictions for a dataset
 
@@ -956,6 +991,7 @@ class ParsnipModel(nn.Module):
         """
         predictions = []
 
+        dataset = self.preprocess(dataset, verbose=len(dataset) > 100)
         loader = self.get_data_loader(dataset, augment=augment)
 
         for batch_lcs in loader:
@@ -981,10 +1017,10 @@ class ParsnipModel(nn.Module):
             encoding_err = np.sqrt(np.exp(result['encoding_logvar']))
 
             # Update the reference time.
-            reference_time = (
-                parsnip_reference_time
-                + encoding_mu[:, 0] * self.settings['time_sigma'] / SIDEREAL_SCALE
+            reference_time_offset = (
+                encoding_mu[:, 0] * self.settings['time_sigma'] / SIDEREAL_SCALE
             )
+            reference_time = parsnip_reference_time + reference_time_offset
             reference_time_error = (
                 encoding_err[:, 0] * self.settings['time_sigma'] / SIDEREAL_SCALE
             )
@@ -1030,11 +1066,11 @@ class ParsnipModel(nn.Module):
 
             # Number of observations with signal-to-noise above some threshold in
             # different time windows.
-            reference_time = batch_predictions['reference_time'][:, None]
-            mask_pre = time < reference_time - 50.
-            mask_rise = (time >= reference_time - 50.) & (time < reference_time)
-            mask_fall = (time >= reference_time) & (time < reference_time + 50.)
-            mask_post = (time >= reference_time + 50.)
+            compare_time = reference_time_offset[:, None]
+            mask_pre = time < compare_time - 50.
+            mask_rise = (time >= compare_time - 50.) & (time < compare_time)
+            mask_fall = (time >= compare_time) & (time < compare_time + 50.)
+            mask_post = (time >= compare_time + 50.)
             mask_s2n = s2n > 3
             batch_predictions['count_s2n_3_pre'] = np.sum(mask_pre & mask_s2n, axis=1)
             batch_predictions['count_s2n_3_rise'] = np.sum(mask_rise & mask_s2n, axis=1)
@@ -1045,13 +1081,21 @@ class ParsnipModel(nn.Module):
             all_chisq = (obs_flux - model_flux)**2 / obs_fluxerr**2
             all_chisq[fluxerr_mask] = 0.
             batch_predictions['model_chisq'] = np.sum(all_chisq, axis=1)
+            batch_predictions['model_dof'] = (
+                batch_predictions['count']
+                - 3             # amplitude, color, reference time
+                - self.settings['latent_size']
+            )
 
             predictions.append(astropy.table.Table(batch_predictions))
 
         predictions = astropy.table.vstack(predictions, 'exact')
 
-        # Merge in the metadata
-        predictions = astropy.table.hstack([dataset.meta, predictions], 'exact')
+        # Drop any old predictions from the metadata, and merge it in.
+        meta = dataset.meta.copy()
+        common_columns = set(predictions.colnames) & set(meta.colnames)
+        meta.remove_columns(common_columns)
+        predictions = astropy.table.hstack([meta, predictions], 'exact')
 
         # Estimate the absolute luminosity (assuming a zeropoint of 25).
         amplitudes = predictions['amplitude'].copy()
@@ -1072,6 +1116,9 @@ class ParsnipModel(nn.Module):
         int_mag_err = frac_to_mag(frac_diff)
         int_mag_err[amplitude_mask] = -1.
         predictions['luminosity_error'] = int_mag_err
+
+        # Remove the processing flag.
+        del predictions['parsnip_preprocessed']
 
         return predictions
 
@@ -1116,7 +1163,7 @@ class ParsnipModel(nn.Module):
         predictions = astropy.table.vstack(predictions, 'exact')
         return predictions
 
-    def _predict(self, lc, pred_times, pred_bands, count):
+    def _predict_time_series(self, lc, pred_times, pred_bands, sample, count):
         # Convert given times to our internal times.
         grid_times = time_to_grid(pred_times, lc.meta['parsnip_reference_time'])
 
@@ -1132,7 +1179,7 @@ class ParsnipModel(nn.Module):
             light_curves = [lc]
 
         # Sample VAE parameters
-        result = self.forward(light_curves)
+        result = self.forward(light_curves, sample)
 
         # Do the predictions
         redshifts = torch.FloatTensor([i.meta['redshift'] for i in light_curves],
@@ -1163,7 +1210,8 @@ class ParsnipModel(nn.Module):
 
         return model_flux, model_spectra, cpu_result
 
-    def predict_light_curve(self, light_curve, count=None, sampling=1., pad=50.):
+    def predict_light_curve(self, light_curve, sample=False, count=None, sampling=1.,
+                            pad=50.):
         # Figure out where to sample the light curve
         min_time = np.min(light_curve['time']) - pad
         max_time = np.max(light_curve['time']) + pad
@@ -1174,8 +1222,8 @@ class ParsnipModel(nn.Module):
         pred_times = np.tile(model_times, len(band_indices))
         pred_bands = np.repeat(band_indices, len(model_times))
 
-        model_flux, model_spectra, model_result = self._predict(
-            light_curve, pred_times, pred_bands, count
+        model_flux, model_spectra, model_result = self._predict_time_series(
+            light_curve, pred_times, pred_bands, sample, count
         )
 
         # Reshape model_flux so that it has the shape (batch, band, time)
@@ -1187,13 +1235,13 @@ class ParsnipModel(nn.Module):
 
         return model_times, model_flux, model_result
 
-    def predict_spectrum(self, light_curve, time, count=None):
+    def predict_spectrum(self, light_curve, time, sample=False, count=None):
         """Predict the spectrum of an object at a given time"""
         pred_times = [time]
         pred_bands = [0]
 
-        model_flux, model_spectra, model_result = self._predict(
-            light_curve, pred_times, pred_bands, count
+        model_flux, model_spectra, model_result = self._predict_time_series(
+            light_curve, pred_times, pred_bands, sample, count
         )
 
         return model_spectra[..., 0]
@@ -1237,10 +1285,11 @@ class ParsnipSncosmoSource(sncosmo.Source):
         self.name = f'parsnip_{model_name}'
         self._param_names = (
             ['amplitude', 'color']
-            + [f's{i}' for i in range(self._model.settings['latent_size'])]
+            + [f's{i+1}' for i in range(self._model.settings['latent_size'])]
         )
         self.param_names_latex = (
-            ['A', 'c'] + [f's_{i}' for i in range(self._model.settings['latent_size'])]
+            ['A', 'c'] + [f's_{i+1}' for i in
+                          range(self._model.settings['latent_size'])]
         )
         self.version = 1
 
@@ -1251,7 +1300,7 @@ class ParsnipSncosmoSource(sncosmo.Source):
         # Generate predictions at the given phase.
         encoding = (torch.FloatTensor(self._parameters[2:])[None, :]
                     .to(self._model.device))
-        phase = phase / SIDEREAL_SCALE
+        phase = phase * SIDEREAL_SCALE
         phase = torch.FloatTensor(phase)[None, :].to(self._model.device)
         color = torch.FloatTensor([self._parameters[1]]).to(self._model.device)
         amplitude = (torch.FloatTensor([self._parameters[0]]).to(self._model.device))
