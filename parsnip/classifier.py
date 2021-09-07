@@ -42,7 +42,6 @@ def weighted_multi_logloss(true_types, classifications):
 class Classifier():
     def __init__(self):
         # Keys to use
-        # TODO: make this something that can be changed.
         self.keys = [
             'color',
             'color_error',
