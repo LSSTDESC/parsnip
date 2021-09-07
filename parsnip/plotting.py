@@ -9,16 +9,36 @@ from .light_curve import preprocess_light_curve
 from .classifier import extract_top_classifications
 
 
+def _get_reference_time(light_curve):
+    if 'reference_time' in light_curve.meta:
+        # Reference time calculated from running through the full ParSNIP model.
+        return light_curve.meta['reference_time']
+    elif 'parsnip_reference_time' in light_curve.meta:
+        # Initial estimate of the reference time.
+        return light_curve.meta['parsnip_reference_time']
+    else:
+        # No estimate of the reference time. Just show the light curve as is.
+        return 0.
+
+
 def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=True,
-                     show_missing_bandpasses=False, percentile=68, normalize_time=False,
-                     normalize_flux=False, ax=None, **kwargs):
-    if not light_curve.meta.get('parsnip_preprocessed', False) and model is not None:
+                     show_missing_bandpasses=False, percentile=68, normalize_flux=False,
+                     sncosmo_model=None, sncosmo_label='SNCosmo Model', ax=None,
+                     **kwargs):
+    if model is not None:
         light_curve = preprocess_light_curve(light_curve, model.settings)
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(5, 4), constrained_layout=True)
 
     used_bandpasses = []
+
+    if normalize_flux:
+        flux_scale = 1. / light_curve.meta['parsnip_scale']
+    else:
+        flux_scale = 1.
+
+    reference_time = _get_reference_time(light_curve)
 
     band_groups = light_curve.group_by('band').groups
     for band_name, band_data in zip(band_groups.keys['band'], band_groups):
@@ -30,15 +50,9 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         marker = avocado.get_band_plot_marker(band_name)
 
         band_time = band_data['time']
-        band_flux = band_data['flux']
-        band_fluxerr = band_data['fluxerr']
-
-        if normalize_time:
-            band_time = band_time - light_curve.meta['parsnip_reference_time']
-
-        if normalize_flux:
-            band_flux = band_flux / light_curve.meta['parsnip_scale']
-            band_fluxerr = band_fluxerr / light_curve.meta['parsnip_scale']
+        band_flux = band_data['flux'] * flux_scale
+        band_fluxerr = band_data['fluxerr'] * flux_scale
+        band_time = band_time - reference_time
 
         ax.errorbar(band_time, band_flux, band_fluxerr, fmt='o', c=c, label=band_name,
                     elinewidth=1, marker=marker)
@@ -50,14 +64,11 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         label_model = True
 
         model_times, model_flux, model_result = model.predict_light_curve(
-            light_curve, count, **kwargs
+            light_curve, sample=True, count=count, **kwargs
         )
 
-        if normalize_time:
-            model_times = model_times - light_curve.meta['parsnip_reference_time']
-
-        if normalize_flux:
-            model_flux = model_flux / light_curve.meta['parsnip_scale']
+        model_times = model_times - reference_time
+        model_flux = model_flux * flux_scale
 
         for band_idx, band_name in enumerate(model.settings['bands']):
             if band_name not in used_bandpasses and not show_missing_bandpasses:
@@ -97,31 +108,75 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
 
         ax.set_ylim(-0.2 * max_model, 1.2 * max_model)
 
+    if sncosmo_model is not None:
+        model_times = np.arange(sncosmo_model.mintime(), sncosmo_model.maxtime(), 0.5)
+
+        for band_idx, band_name in enumerate(model.settings['bands']):
+            if band_name not in used_bandpasses and not show_missing_bandpasses:
+                continue
+
+            try:
+                flux = flux_scale * sncosmo_model.bandflux(
+                    band_name, model_times, zp=25., zpsys='ab'
+                )
+            except ValueError:
+                # Outside of wavelength range
+                continue
+
+            c = avocado.get_band_plot_color(band_name)
+            if band_idx == 0:
+                label = sncosmo_label
+            else:
+                label = None
+
+            ax.plot(model_times - reference_time, flux, c=c, ls='--', label=label)
+
     ax.legend()
 
-    if normalize_time:
-        ax.set_xlabel('Relative Time (days)')
+    if reference_time != 0.:
+        ax.set_xlabel(f'Relative Time (days + {reference_time:.2f})')
     else:
         ax.set_xlabel('Time (days)')
 
     if normalize_flux:
         ax.set_ylabel('Normalized Flux')
     else:
-        ax.set_ylabel('Flux')
+        ax.set_ylabel('Flux ($ZP_{AB}$=25)')
 
 
-def plot_spectrum(model, light_curve, time, count=100, show_bands=True, percentile=68,
-                  ax=None, c=None, label=None):
+def normalize_spectrum_flux(wave, flux, min_wave=5500., max_wave=6500.):
+    cut = (wave > min_wave) & (wave < max_wave)
+    scale = np.mean(flux[..., cut], axis=-1)
+    return (flux.T / scale).T
+
+
+def plot_spectrum(light_curve, model, time, count=100, show_uncertainty_bands=True,
+                  percentile=68, ax=None, c=None, label=None, offset=None,
+                  normalize_flux=False, normalize_min_wave=5500.,
+                  normalize_max_wave=6500., spectrum_label=None,
+                  spectrum_label_wave=7500., spectrum_label_offset=0.2, flux_scale=1.):
+    light_curve = preprocess_light_curve(light_curve, model.settings)
+
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
 
     model_wave = model.model_wave
-    model_spectra = model.predict_spectrum(light_curve, time, count)
+    model_spectra = model.predict_spectrum(light_curve, time, sample=True, count=count)
+
+    if normalize_flux:
+        model_spectra = normalize_spectrum_flux(
+            model_wave, model_spectra, normalize_min_wave, normalize_max_wave
+        )
+
+    model_spectra *= flux_scale
+
+    if offset is not None:
+        model_spectra += offset
 
     if count == 0:
         # Single prediction
         ax.plot(model_wave, model_spectra, c=c, label=label)
-    elif show_bands:
+    elif show_uncertainty_bands:
         # Multiple predictions, show error bands.
         percentile_offset = (100 - percentile) / 2.
         flux_median = np.median(model_spectra, axis=0)
@@ -134,8 +189,148 @@ def plot_spectrum(model, light_curve, time, count=100, show_bands=True, percenti
         # Multiple predictions, show raw light curves
         ax.plot(model_wave, model_spectra.T, c=c, alpha=0.1)
 
+    if spectrum_label is not None:
+        # Show a label above the spectrum.
+        wave_idx = np.searchsorted(model.model_wave, spectrum_label_wave)
+        label_height = spectrum_label_offset + np.mean(model_spectra[..., wave_idx])
+        ax.text(spectrum_label_wave, label_height, spectrum_label)
+
     ax.set_xlabel('Wavelength ($\\AA$)')
-    ax.set_ylabel('Flux')
+    if normalize_flux:
+        ax.set_ylabel('Normalized Flux')
+    else:
+        ax.set_ylabel('Flux')
+
+
+def plot_spectra(light_curve, model, times=[0., 10., 20., 30.], flux_scale=1.,
+                 ax=None, sncosmo_model=None, sncosmo_label='SNCosmo Model',
+                 spectrum_label_offset=0.2):
+    light_curve = preprocess_light_curve(light_curve, model.settings)
+
+    wave = model.model_wave
+    redshift = light_curve.meta['redshift']
+    scale = flux_scale / light_curve.meta['parsnip_scale']
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(5, 4), constrained_layout=True)
+
+    reference_time = _get_reference_time(light_curve)
+
+    for plot_idx, time in enumerate(times):
+        plot_offset = len(times) - plot_idx - 1
+
+        plot_time = time + reference_time
+
+        if plot_idx == 0:
+            use_label = 'ParSNIP Model'
+            use_sncosmo_label = sncosmo_label
+        else:
+            use_label = None
+            use_sncosmo_label = None
+
+        plot_spectrum(light_curve, model, plot_time, ax=ax, c='C2',
+                      flux_scale=scale, offset=plot_offset, label=use_label,
+                      spectrum_label=f'{time:+.1f} days',
+                      spectrum_label_offset=spectrum_label_offset)
+
+        if sncosmo_model is not None:
+            sncosmo_flux = (
+                sncosmo_model._flux(plot_time, wave * (1 + redshift))[0]
+                * 10**(0.4 * 45)
+                * (1 + redshift)
+            )
+            ax.plot(wave, scale * sncosmo_flux + plot_offset, c='k', alpha=0.3,
+                    label=use_sncosmo_label)
+
+    ax.set_ylabel('Normalized Flux + Offset')
+    ax.legend()
+
+
+def plot_sne_space(light_curve, model, name, min_wave=10000., max_wave=0., time_diff=0.,
+                   min_time=-10000., max_time=100000., source=None, kernel=5,
+                   flux_scale=0.5, label_wave=9000., label_offset=0.2, figsize=(5, 6)):
+    import json
+    import urllib
+    from scipy.signal import medfilt
+
+    light_curve = preprocess_light_curve(light_curve, model.settings)
+
+    redshift = light_curve.meta['redshift']
+    reference_time = _get_reference_time(light_curve)
+
+    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
+
+    url = f'https://api.sne.space/{name}/spectra/time+data+instrument+telescope+source'
+    with urllib.request.urlopen(url) as request:
+        data = json.loads(request.read().decode())
+
+    spectra = data[name]['spectra']
+
+    plot_idx = 0
+    last_time = 1e9
+
+    for spec in spectra[::-1]:
+        # Go in reverse order so that we can plot the spectra with the
+        # first one on top.
+        spec_time, spec_data, telescope, _, spec_source = spec
+
+        spec_time = float(spec_time)
+        spec_data = np.array(spec_data, dtype=float)
+
+        spec_wave = spec_data[:, 0] / (1 + redshift)
+        spec_flux = spec_data[:, 1]
+        spec_flux = medfilt(spec_flux, kernel)
+
+        if spec_wave[0] > min_wave or spec_wave[-1] < max_wave:
+            # print("skipping wave")
+            continue
+
+        if last_time - spec_time < time_diff:
+            continue
+
+        if (spec_time - reference_time < min_time
+                or spec_time - reference_time > max_time):
+            continue
+
+        if source is not None and spec_source != source:
+            continue
+
+        last_time = spec_time
+
+        normalize_min_wave = max([5500., spec_wave[0]])
+        normalize_max_wave = min([6500., spec_wave[-1]])
+
+        plot_offset_scale = 1.
+        plot_offset = (plot_idx * plot_offset_scale)
+
+        plot_spectrum(
+            light_curve,
+            model,
+            spec_time,
+            normalize_flux=True,
+            normalize_min_wave=normalize_min_wave,
+            normalize_max_wave=normalize_max_wave,
+            flux_scale=flux_scale,
+            ax=ax,
+            offset=plot_offset,
+            c='C2'
+        )
+
+        spec_flux = flux_scale * normalize_spectrum_flux(
+            spec_wave, spec_flux, normalize_min_wave, normalize_max_wave
+        )
+        ax.plot(spec_wave, spec_flux + plot_offset, c='k')
+
+        plt.text(label_wave, plot_offset + label_offset,
+                 f'${spec_time - reference_time:.1f}$ days', ha='right')
+
+        plot_idx += 1
+
+    plt.legend(['ParSNIP Model', 'Observed Spectra'])
+    plt.title("")
+    plt.xlabel('Rest-Frame Wavelength ($\\AA$)')
+    plt.ylabel('Normalized Flux + Offset')
+    plt.xlim(1500., 10500.)
 
 
 def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=None,
@@ -202,6 +397,7 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
         'SNIa-91bg': 'lightgreen',
 
         'SLSN': 'C2',
+        'SLSN-I': 'C2',
         'SNII': 'C1',
         'SNIIn': 'C3',
         'SNIbc': 'C4',
@@ -254,7 +450,7 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
             valid_predictions = predictions
 
         for type_name in plot_labels:
-            type_predictions = valid_predictions[valid_predictions['label'] ==
+            type_predictions = valid_predictions[valid_predictions['type'] ==
                                                  type_name]
 
             color = color_map[type_name]
