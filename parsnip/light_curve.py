@@ -102,7 +102,6 @@ def preprocess_light_curve(light_curve, settings):
         outside_obs = new_lc[~time_mask & band_mask]
         if len(outside_obs) == 0:
             # No outside observations, don't update the background level.
-            # TODO: Reject all observations in this band?
             continue
 
         # Estimate the background level and subtract it.
