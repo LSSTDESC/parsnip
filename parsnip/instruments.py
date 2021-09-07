@@ -103,7 +103,7 @@ def get_band_plot_color(band):
         Name of the band to use.
     """
     if band in band_info:
-        return band_info[band]
+        return band_info[band][2]
 
     # Systematic random colors. We use the hash of the band name.
     # Note: hash() uses a random offset in python 3 so it isn't consistent
