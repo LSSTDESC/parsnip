@@ -114,7 +114,7 @@ class ParsnipModel(nn.Module):
                             - self.settings['time_window'] // 2)
 
         # Build the model
-        self.build_model()
+        self._build_model()
 
         # Set up the training
         self.epoch = 0
@@ -222,7 +222,7 @@ class ParsnipModel(nn.Module):
         self.band_interpolate_weights = torch.FloatTensor(band_weights).to(self.device)
         self.model_wave = 10**(model_log_wave)
 
-    def calculate_band_weights(self, redshifts):
+    def _calculate_band_weights(self, redshifts):
         """Calculate the band weights for a given set of redshifts
 
         We have precomputed the weights for each bandpass, so we simply interpolate
@@ -251,7 +251,7 @@ class ParsnipModel(nn.Module):
 
         return result
 
-    def test_band_weights(self, redshift, source='salt2-extended'):
+    def _test_band_weights(self, redshift, source='salt2-extended'):
         """Test the band weights by comparing sncosmo photometry to the photometry
         calculated by this class.
         """
@@ -265,7 +265,7 @@ class ParsnipModel(nn.Module):
         # parsnip photometry
         model.set(z=0.)
         model_flux = model._flux(0., self.model_wave)[0]
-        band_weights = self.calculate_band_weights(
+        band_weights = self._calculate_band_weights(
             torch.FloatTensor([redshift]))[0].numpy()
         parsnip_photometry = np.sum(model_flux[:, None] * band_weights, axis=0)
 
@@ -374,7 +374,7 @@ class ParsnipModel(nn.Module):
         else:
             return new_light_curves
 
-    def get_data(self, light_curves):
+    def _get_data(self, light_curves):
         """Extract data needed by ParSNIP from a set of light curves."""
         redshifts = []
 
@@ -479,7 +479,7 @@ class ParsnipModel(nn.Module):
 
         return input_data, compare_data, redshifts, compare_band_indices
 
-    def build_model(self):
+    def _build_model(self):
         """Build the model"""
         if self.settings['input_redshift']:
             input_size = len(self.settings['bands']) * 2 + 1
@@ -667,7 +667,7 @@ class ParsnipModel(nn.Module):
         model_spectra = self.decode_spectra(encoding, phases, color, amplitude)
 
         # Figure out the weights for each band
-        band_weights = self.calculate_band_weights(redshifts)
+        band_weights = self._calculate_band_weights(redshifts)
         num_batches = band_indices.shape[0]
         num_observations = band_indices.shape[1]
         batch_indices = (
@@ -685,7 +685,7 @@ class ParsnipModel(nn.Module):
 
         return model_spectra, model_flux
 
-    def reparameterize(self, mu, logvar, sample=True):
+    def _reparameterize(self, mu, logvar, sample=True):
         if sample:
             std = torch.exp(0.5*logvar)
             eps = torch.randn_like(std)
@@ -693,9 +693,9 @@ class ParsnipModel(nn.Module):
         else:
             return mu
 
-    def sample(self, encoding_mu, encoding_logvar, sample=True):
-        sample_encoding = self.reparameterize(encoding_mu, encoding_logvar,
-                                              sample=sample)
+    def _sample(self, encoding_mu, encoding_logvar, sample=True):
+        sample_encoding = self._reparameterize(encoding_mu, encoding_logvar,
+                                               sample=sample)
 
         time_sigma = self.settings['time_sigma']
         color_sigma = self.settings['color_sigma']
@@ -716,14 +716,14 @@ class ParsnipModel(nn.Module):
 
     def forward(self, light_curves, sample=True, to_numpy=False):
         # Extract the data that we need and move it to the right device.
-        input_data, compare_data, redshifts, band_indices = self.get_data(light_curves)
+        input_data, compare_data, redshifts, band_indices = self._get_data(light_curves)
 
         # Encode the light curves.
         encoding_mu, encoding_logvar = self.encode(input_data)
 
         # Sample from the latent space.
-        ref_times, color, encoding = self.sample(encoding_mu, encoding_logvar,
-                                                 sample=sample)
+        ref_times, color, encoding = self._sample(encoding_mu, encoding_logvar,
+                                                  sample=sample)
 
         # Decode the light curves
         model_spectra, model_flux = self.decode(
@@ -735,9 +735,9 @@ class ParsnipModel(nn.Module):
 
         # Analytically evaluate the conditional distribution for the amplitude and
         # sample from it.
-        amplitude_mu, amplitude_logvar = self.compute_amplitude(weight, model_flux,
-                                                                flux)
-        amplitude = self.reparameterize(amplitude_mu, amplitude_logvar, sample=sample)
+        amplitude_mu, amplitude_logvar = self._compute_amplitude(weight, model_flux,
+                                                                 flux)
+        amplitude = self._reparameterize(amplitude_mu, amplitude_logvar, sample=sample)
         model_flux = model_flux * amplitude[:, None]
         model_spectra = model_spectra * amplitude[:, None, None]
 
@@ -764,7 +764,7 @@ class ParsnipModel(nn.Module):
 
         return result
 
-    def compute_amplitude(self, weight, model_flux, flux):
+    def _compute_amplitude(self, weight, model_flux, flux):
         num = torch.sum(weight * model_flux * flux, axis=1)
         denom = torch.sum(weight * model_flux * model_flux, axis=1)
 

@@ -13,5 +13,6 @@ estimation, and identifying novel transients.
    :titlesonly:
 
    installation
+   reference
 
 Source code: https://github.com/kboone/parsnip

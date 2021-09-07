@@ -4,14 +4,7 @@
 # list see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-# -- Path setup --------------------------------------------------------------
-
-import os
-from importlib.metadata import version
-
-# Generate api directory if it doesn't already exist
-if not os.path.exists('api'):
-    os.mkdir('api')
+import importlib.metadata
 
 # -- Project information -----------------------------------------------------
 
@@ -20,7 +13,7 @@ copyright = '2021, Kyle Boone'
 author = 'Kyle Boone'
 
 # The full version, including alpha/beta/rc tags
-release = version('parsnip')
+release = importlib.metadata.version('parsnip')
 
 
 # -- General configuration ---------------------------------------------------
@@ -78,10 +71,5 @@ pygments_style = 'sphinx'
 # a list of builtin themes.
 #
 html_theme = 'sphinx_rtd_theme'
-
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are copied after the builtin static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
-# html_static_path = ['_static']
 
 master_doc = 'index'
