@@ -67,6 +67,10 @@ def grid_to_time(grid_time, reference_time):
 
 def preprocess_light_curve(light_curve, settings):
     """Preprocess the light curve and package it as needed for ParSNIP"""
+    if light_curve.meta.get('parsnip_preprocessed', False):
+        # Already preprocessed
+        return light_curve
+
     # Align the observations to a grid in sidereal time.
     reference_time = _determine_time_grid(light_curve)
 
