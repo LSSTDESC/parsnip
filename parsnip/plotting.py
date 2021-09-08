@@ -23,8 +23,33 @@ def _get_reference_time(light_curve):
 
 def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=True,
                      show_missing_bandpasses=False, percentile=68, normalize_flux=False,
-                     sncosmo_model=None, sncosmo_label='SNCosmo Model', ax=None,
-                     **kwargs):
+                     sncosmo_model=None, sncosmo_label='SNCosmo Model', ax=None):
+    """Plot a light curve
+
+    Parameters
+    ----------
+    light_curve : `astropy.table.Table`
+        Light curve to plot
+    model : `ParsnipModel`, optional
+        ParSNIP model to show, by default None
+    count : int, optional
+        Number of samples from the ParSNIP model, by default 100
+    show_uncertainty_bands : bool, optional
+        If True (default), show uncertainty bands. Otherwise, show individual draws.
+    show_missing_bandpasses : bool, optional
+        Whether to show model predictions for bandpasses where there is no data, by
+        default False
+    percentile : int, optional
+        Percentile for the uncertainty bands, by default 68
+    normalize_flux : bool, optional
+        Whether to normalize the flux, by default False
+    sncosmo_model : `sncosmo.Model`, optional
+        SNCosmo model to show, by default None
+    sncosmo_label : str, optional
+        Legend label for the SNCosmo model, by default 'SNCosmo Model'
+    ax : axis, optional
+        Matplotlib axis to use for the plot, by default one will be created
+    """
     if model is not None:
         light_curve = preprocess_light_curve(light_curve, model.settings)
 
@@ -63,7 +88,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         label_model = True
 
         model_times, model_flux, model_result = model.predict_light_curve(
-            light_curve, sample=True, count=count, **kwargs
+            light_curve, sample=True, count=count
         )
 
         model_times = model_times - reference_time
@@ -144,6 +169,26 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
 
 
 def normalize_spectrum_flux(wave, flux, min_wave=5500., max_wave=6500.):
+    """Normalize the flux of a spectrum
+
+    The flux will be normalized so that it averages to 1 in a given window.
+
+    Parameters
+    ----------
+    wave : `numpy.ndarray`
+        Wavelengths
+    flux : `numpy.ndarray`
+        Flux values
+    min_wave : float, optional
+        Minimum wavelength to consider for normalization, by default 5500.
+    max_wave : float, optional
+        Maximum wavelength to consider for normalization, by default 6500.
+
+    Returns
+    -------
+    `numpy.ndarray`
+        Normalized flux
+    """
     cut = (wave > min_wave) & (wave < max_wave)
     scale = np.mean(flux[..., cut], axis=-1)
     return (flux.T / scale).T
@@ -154,6 +199,45 @@ def plot_spectrum(light_curve, model, time, count=100, show_uncertainty_bands=Tr
                   normalize_flux=False, normalize_min_wave=5500.,
                   normalize_max_wave=6500., spectrum_label=None,
                   spectrum_label_wave=7500., spectrum_label_offset=0.2, flux_scale=1.):
+    """Plot the spectrum of a light curve predicted by a ParSNIP model
+
+    Parameters
+    ----------
+    light_curve : `astropy.table.Table`
+        Light curve
+    model : `ParsnipModel`
+        Model to use for the prediction
+    time : float
+        Time to predict the spectrum at
+    count : int, optional
+        Number of spectra to sample, by default 100
+    show_uncertainty_bands : bool, optional
+        Whether to show uncertainty bands, by default True
+    percentile : int, optional
+        Percentile for the uncertainty bands, by default 68
+    ax : axis, optional
+        Matplotlib axis to use, by default None
+    c : str, optional
+        Color for the plot, by default None
+    label : str, optional
+        Label for the plot, by default None
+    offset : float, optional
+        Constant offset to add to the flux for plotting, by default None
+    normalize_flux : bool, optional
+        Whether to normalize the flux, by default False
+    normalize_min_wave : float, optional
+        Minimum wavelength of the normalization window, by default 5500.
+    normalize_max_wave : float, optional
+        Maximum wavelength of the normalization window, by default 6500.
+    spectrum_label : str, optional
+        Label to plot near the spectrum, by default None
+    spectrum_label_wave : float, optional
+        Wavelength to plot the spectrum label at, by default 7500.
+    spectrum_label_offset : float, optional
+        Y offset for the spectrum label, by default 0.2
+    flux_scale : float, optional
+        Scale to multiply the flux by, by default 1.
+    """
     light_curve = preprocess_light_curve(light_curve, model.settings)
 
     if ax is None:
@@ -204,6 +288,27 @@ def plot_spectrum(light_curve, model, time, count=100, show_uncertainty_bands=Tr
 def plot_spectra(light_curve, model, times=[0., 10., 20., 30.], flux_scale=1.,
                  ax=None, sncosmo_model=None, sncosmo_label='SNCosmo Model',
                  spectrum_label_offset=0.2):
+    """Plot the spectral time series of a light curve predicted by a ParSNIP model
+
+    Parameters
+    ----------
+    light_curve : `astropy.table.Table`
+        Light curve
+    model : `ParsnipModel`
+        Model to use for the predictions
+    times : list, optional
+        Times to predict the spectra at, by default [0., 10., 20., 30.]
+    flux_scale : float, optional
+        Scale to multiple the flux by, by default 1.
+    ax : axis, optional
+        Matplotlib axis, by default None
+    sncosmo_model : `sncosmo.Model`, optional
+        SNCosmo model to overplot, by default None
+    sncosmo_label : str, optional
+        Label for the SNCosmo model, by default 'SNCosmo Model'
+    spectrum_label_offset : float, optional
+        Offset of the time labels for each spectrum, by default 0.2
+    """
     light_curve = preprocess_light_curve(light_curve, model.settings)
 
     wave = model.model_wave
@@ -248,6 +353,41 @@ def plot_spectra(light_curve, model, times=[0., 10., 20., 30.], flux_scale=1.,
 def plot_sne_space(light_curve, model, name, min_wave=10000., max_wave=0., time_diff=0.,
                    min_time=-10000., max_time=100000., source=None, kernel=5,
                    flux_scale=0.5, label_wave=9000., label_offset=0.2, figsize=(5, 6)):
+    """Compare a ParSNIP spectrum prediction to a real spectrum from sne.space
+
+    Parameters
+    ----------
+    light_curve : `astropy.table.Table`
+        Light curve
+    model : `ParsnipModel`
+        ParSNIP Model to use for the prediction
+    name : str
+        Name of the light curve on sne.space
+    min_wave : float, optional
+        Ignore any spectra that don't have data bluer than this wavelength, by default
+        10000.
+    max_wave : float, optional
+        Ignore any spectra that don't have data redder than this wavelength, by default
+        0.
+    time_diff : float, optional
+        Minimum time between spectra, by default 0.
+    min_time : float, optional
+        Ignore any spectra before this time, by default -10000.
+    max_time : float, optional
+        Ignore any spectra after this time, by default 100000.
+    source : str, optional
+        Ignore any spectra not from this source, by default None
+    kernel : int, optional
+        Smooth the spectra by a median filter kernel of this size, by default 5
+    flux_scale : float, optional
+        Scale the flux by this amount, by default 0.5
+    label_wave : float, optional
+        Show labels with the times of each spectrum at this wavelength, by default 9000.
+    label_offset : float, optional
+        Y offset to use for the labels, by default 0.2
+    figsize : tuple, optional
+        Figure size, by default (5, 6)
+    """
     import json
     import urllib
     from scipy.signal import medfilt
@@ -338,6 +478,19 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
 
     Adapted from example that used to be at
     http://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html
+
+    Parameters
+    ----------
+    predictions : `astropy.table.Table`
+        Predictions from `ParsnipModel.predict_dataset`
+    classifications : `astropy.table.Table`
+        Classifications from a `Classifier`
+    figsize : tuple, optional
+        Figure size, by default (5, 4)
+    title : str, optional
+        Figure title, by default None
+    verbose : bool, optional
+        Whether to print additional statistics, by default True
     """
     true_types = np.char.decode(predictions['type'])
     predicted_types = extract_top_classifications(classifications)
@@ -389,7 +542,36 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
 def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx3=None,
                         max_count=1000, show_legend=True, legend_ncol=1, marker=None,
                         markersize=5, ax=None):
-    """Plot a representation"""
+    """Plot the representation of a ParSNIP model
+
+    Parameters
+    ----------
+    predictions : `astropy.table.Table`
+        Predictions for a dataset from `ParsnipModel.predict_dataset`
+    plot_labels : List[str]
+        Labels for each of the classes
+    mask : `np.array`, optional
+        Mask to apply to the predictions, by default None
+    idx1 : int, optional
+        Intrinsic latent variable to plot on the x axis, by default 1
+    idx2 : int, optional
+        Intrinsic latent variable to plot on the y axis, by default 2
+    idx3 : int, optional
+        If specified, show a three paneled plot with this latent variable in the extra
+        two panels plotted against the other ones
+    max_count : int, optional
+        Maximum number of light curves to show of each type, by default 1000
+    show_legend : bool, optional
+        Whether to show the legend, by default True
+    legend_ncol : int, optional
+        Number of columns to use in the legend, by default 1
+    marker : str, optional
+        Matplotlib marker to use, by default None
+    markersize : int, optional
+        Matplotlib marker size, by default 5
+    ax : axis, optional
+        Matplotlib axis, by default None
+    """
     color_map = {
         'SNIa': 'C0',
         'SNIax': 'C9',

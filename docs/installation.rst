@@ -20,7 +20,7 @@ Install using pip (recommended)
 
 ParSNIP is available on PyPI. To install the latest release::
 
-    pip install lcdata
+    pip install astro-parsnip
 
 
 Install development version

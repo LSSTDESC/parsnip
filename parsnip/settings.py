@@ -43,7 +43,21 @@ default_settings = {
 
 
 def update_derived_settings(settings):
-    """Update derived settings for a model"""
+    """Update the derived settings for a model
+
+    This calculate the Milky Way extinctions in each band, and determines whether
+    background correction should be applied.
+
+    Parameters
+    ----------
+    settings : dict
+        Input settings
+
+    Returns
+    -------
+    dict
+        Updated settings with derived settings calculated
+    """
 
     # Figure out what Milky Way extinction correction to apply for each band.
     settings['band_mw_extinctions'] = calculate_band_mw_extinctions(settings['bands'])
@@ -59,7 +73,28 @@ def update_derived_settings(settings):
 
 
 def parse_settings(bands, settings={}, ignore_unknown_settings=False):
-    """Parse the settings for a ParSNIP model"""
+    """Parse the settings for a ParSNIP model
+
+    Parameters
+    ----------
+    bands : List[str]
+        Bands to use in the encoder model
+    settings : dict, optional
+        Settings to override, by default {}
+    ignore_unknown_settings : bool, optional
+        If False (default), raise an KeyError if there are any unknown settings.
+        Otherwise, do nothing.
+
+    Returns
+    -------
+    dict
+        Parsed settings dictionary
+
+    Raises
+    ------
+    KeyError
+        If there are unknown keys in the input settings
+    """
     if 'derived_settings_calculated' in settings:
         # We are loading a prebuilt-model, don't recalculate everything.
         prebuilt_model = True
@@ -85,6 +120,20 @@ def parse_settings(bands, settings={}, ignore_unknown_settings=False):
 
 
 def parse_int_list(text):
+    """Parse a string into a list of integers
+
+    For example, the string "1,2,3,4" will be parsed to [1, 2, 3, 4].
+
+    Parameters
+    ----------
+    text : str
+        String to parse
+
+    Returns
+    -------
+    List[int]
+        Parsed integer list
+    """
     result = [int(i) for i in text.split(',')]
     return result
 
@@ -94,6 +143,16 @@ def build_default_argparse(description):
 
     The resulting parsed namespace can be passed to parse_settings to get a ParSNIP
     settings object.
+
+    Parameters
+    ----------
+    description : str
+        Description for the argument parser
+
+    Returns
+    -------
+    `argparse.ArgumentParser`
+        Argument parser with the ParSNIP model settings added as arguments
     """
     parser = argparse.ArgumentParser(description=description)
 

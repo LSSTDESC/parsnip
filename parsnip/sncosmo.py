@@ -8,6 +8,13 @@ from .light_curve import SIDEREAL_SCALE
 
 
 class ParsnipSncosmoSource(sncosmo.Source):
+    """SNCosmo interface for a ParSNIP model
+
+    Parameters
+    ----------
+    model : `ParsnipModel`
+        ParSNIP model to use
+    """
     def __init__(self, model):
         self._model = model
 

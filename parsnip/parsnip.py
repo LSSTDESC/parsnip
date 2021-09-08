@@ -25,6 +25,20 @@ from .sncosmo import ParsnipSncosmoSource
 
 
 class ResidualBlock(nn.Module):
+    """1D residual convolutional neural network block
+
+    This module operates on 1D sequences. The input will be padded so that length of the
+    sequences is be left unchanged.
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of channels for the input
+    out_channels : int
+        Number of channels for the output
+    dilation : int
+        Dilation to use in the convolution
+    """
     def __init__(self, in_channels, out_channels, dilation):
         super().__init__()
 
@@ -60,6 +74,20 @@ class ResidualBlock(nn.Module):
 
 
 class Conv1dBlock(nn.Module):
+    """1D convolutional neural network block
+
+    This module operates on 1D sequences. The input will be padded so that length of the
+    sequences is be left unchanged.
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of channels for the input
+    out_channels : int
+        Number of channels for the output
+    dilation : int
+        Dilation to use in the convolution
+    """
     def __init__(self, in_channels, out_channels, dilation):
         super().__init__()
 
@@ -79,12 +107,41 @@ class Conv1dBlock(nn.Module):
 
 
 class GlobalMaxPoolingTime(nn.Module):
+    """Time max pooling layer for 1D sequences
+
+    This layer applies global max pooling over all channels to elminate the channel
+    dimension while preserving the time dimension.
+    """
     def forward(self, x):
         out, inds = torch.max(x, 2)
         return out
 
 
 class ParsnipModel(nn.Module):
+    """Generative model of transient light curves
+
+    This class represents a generative model of transient light curves. Given a set of
+    latent variables representing a transient, it can predict the full spectral time
+    series of that transient. It can also use variational inference to predict the
+    posterior distribution over the latent variables for a given light curve.
+
+    Parameters
+    ----------
+    path : str
+        Path to where the model should be stored on disk.
+    bands : List[str]
+        Bands that the model uses as input for variational inference
+    device : str
+        PyTorch device to use for the model
+    threads : int
+        Number of threads to use
+    settings : dict
+        Settings for the model. Any settings specified here will override the defaults
+        set in settings.py
+    ignore_unknown_settings : bool
+        If True, ignore any settings that are specified that are unknown. Otherwise,
+        raise a KeyError if an unknown setting is specified. By default False.
+    """
     def __init__(self, path, bands, device='cpu', threads=8, settings={},
                  ignore_unknown_settings=False):
         super().__init__()
@@ -128,7 +185,16 @@ class ParsnipModel(nn.Module):
         self.to(self.device, force=True)
 
     def to(self, device, force=False):
-        """Send the model to the given device"""
+        """Send the model to the specified device
+
+        Parameters
+        ----------
+        device : str
+            PyTorch device
+        force : bool, optional
+            If True, force the model to be sent to the device even if it is there
+            already (useful if only parts of the model are there), by default False
+        """
         new_device = parse_device(device)
 
         if self.device == new_device and not force:
@@ -228,6 +294,16 @@ class ParsnipModel(nn.Module):
         We have precomputed the weights for each bandpass, so we simply interpolate
         those weights at the desired redshifts. We are working in log-wavelength, so a
         change in redshift just gives us a shift in indices.
+
+        Parameters
+        ----------
+        redshifts : List[float]
+            Redshifts to calculate the band weights at
+
+        Returns
+        -------
+        `numpy.ndarray`
+            Band weights for each redshift/band combination
         """
         # Figure out the locations to sample at for each redshift.
         locs = (
@@ -252,8 +328,16 @@ class ParsnipModel(nn.Module):
         return result
 
     def _test_band_weights(self, redshift, source='salt2-extended'):
-        """Test the band weights by comparing sncosmo photometry to the photometry
-        calculated by this class.
+        """Test the accuracy of the band weights
+
+        We compare sncosmo photometry to the photometry calculated by this class.
+
+        Parameters
+        ----------
+        redshift : float
+            Redshift to evaluate the model at
+        source : str, optional
+            SNCosmo source to use, by default 'salt2-extended'
         """
         model = sncosmo.Model(source=source)
 
@@ -275,7 +359,26 @@ class ParsnipModel(nn.Module):
         print(f"ratio:                  {parsnip_photometry / sncosmo_photometry}")
 
     def preprocess(self, dataset, chunksize=64, verbose=True):
-        """Preprocess an lcdata dataset"""
+        """Preprocess an lcdata dataset
+
+        The preprocessing will be done over multiple threads. Set `ParsnipModel.threads`
+        to change how many are used. If the dataset is already preprocessed, then
+        nothing will be done and it will be returned as is.
+
+        Parameters
+        ----------
+        dataset : `lcdata.Dataset`
+            Dataset to preprocess
+        chunksize : int, optional
+            Number of light curves to process at a time, by default 64
+        verbose : bool, optional
+            Whether to show a progress bar, by default True
+
+        Returns
+        -------
+        `lcdata.Dataset`
+            Preprocessed dataset
+        """
         import lcdata
 
         # Check if we were given a preprocessed dataset. We store our preprocessed data
@@ -308,7 +411,22 @@ class ParsnipModel(nn.Module):
         return dataset
 
     def augment_light_curves(self, light_curves, as_table=True):
-        """Augment a set of light curves."""
+        """Augment a set of light curves
+
+        Parameters
+        ----------
+        light_curves : List[`astropy.table.Table`]
+            List of light curves to augment
+        as_table : bool, optional
+            Whether to return the light curves as astropy Tables, by default True.
+            Constructing new tables is relatively slow, so internally we skip this step
+            when training the ParSNIP model.
+
+        Returns
+        -------
+        List
+            Augmented light curves
+        """
         # Check if we have a list of light curves or a single one and handle it
         # appropriately.
         if isinstance(light_curves, astropy.table.Table):
@@ -375,7 +493,24 @@ class ParsnipModel(nn.Module):
             return new_light_curves
 
     def _get_data(self, light_curves):
-        """Extract data needed by ParSNIP from a set of light curves."""
+        """Extract data needed by ParSNIP from a set of light curves.
+
+        Parameters
+        ----------
+        light_curves : List[`astropy.table.Table`]
+            Light curves to extract data from
+
+        Returns
+        -------
+        input_data : `torch.FloatTensor`
+            Data that is used as input to the ParSNIP encoder
+        compare_data : `torch.FloatTensor`
+            Data that is used for comparisons with the output of the ParSNIP decoder
+        redshifts : `torch.FloatTensor`
+            Redshifts of each light curve
+        compare_band_indices : `torch.LongTensor`
+            Band indices for each observation that will be compared
+        """
         redshifts = []
 
         data = []
@@ -584,6 +719,20 @@ class ParsnipModel(nn.Module):
         self.decode_layers = nn.Sequential(*decode_layers)
 
     def get_data_loader(self, dataset, augment=False, **kwargs):
+        """Get a PyTorch DataLoader for an lcdata Dataset
+
+        Parameters
+        ----------
+        dataset : `lcdata.Dataset`
+            Dataset to load
+        augment : bool, optional
+            Whether to augment the dataset, by default False
+
+        Returns
+        -------
+        `torch.utils.data.DataLoader`
+            PyTorch DataLoader for the dataset
+        """
         # Preprocess the dataset if it isn't already.
         dataset = self.preprocess(dataset)
 
@@ -603,6 +752,23 @@ class ParsnipModel(nn.Module):
                           collate_fn=collate_fn, **kwargs)
 
     def encode(self, input_data):
+        """Predict the latent variables for a set of light curves
+
+        We use variational inference, and predict the parameters of a posterior
+        distribution over the latent space.
+
+        Parameters
+        ----------
+        input_data : `torch.FloatTensor`
+            Input data representing a set of gridded light curves
+
+        Returns
+        -------
+        `torch.FloatTensor`
+            Mean predictions for each latent variable
+        `torch.FloatTensor`
+            Log-variance predictions for each latent variable
+        """
         # Apply common encoder blocks
         e = self.encode_layers(input_data)
 
@@ -637,6 +803,25 @@ class ParsnipModel(nn.Module):
         return encoding_mu, encoding_logvar
 
     def decode_spectra(self, encoding, phases, color, amplitude=None):
+        """Predict the spectra at a given set of latent variables
+
+        Parameters
+        ----------
+        encoding : `torch.FloatTensor`
+            Coordinates in the ParSNIP intrinsic latent space for each light curve
+        phases : `torch.FloatTensor`
+            Phases to decode each light curve at
+        color : `torch.FloatTensor`
+            Color of each light curve
+        amplitude : `torch.FloatTensor`, optional
+            Amplitude to scale each light curve by, by default no scaling will be
+            applied.
+
+        Returns
+        -------
+        `torch.FloatTensor`
+            Predicted spectra
+        """
         scale_phases = phases / (self.settings['time_window'] // 2)
 
         repeat_encoding = encoding[:, :, None].expand((-1, -1, scale_phases.shape[1]))
@@ -658,6 +843,33 @@ class ParsnipModel(nn.Module):
 
     def decode(self, encoding, ref_times, color, times, redshifts, band_indices,
                amplitude=None):
+        """Predict the light curves for a given set of latent variables
+
+        Parameters
+        ----------
+        encoding : `torch.FloatTensor`
+            Coordinates in the ParSNIP intrinsic latent space for each light curve
+        ref_times : `torch.FloatTensor`
+            Reference time for each light curve
+        color : `torch.FloatTensor`
+            Color of each light curve
+        times : `torch.FloatTensor`
+            Times to predict each light curve at
+        redshifts : `torch.FloatTensor`
+            Redshift of each light curve
+        band_indices : `torch.LongTensor`
+            Band indices for each observation
+        amplitude : `torch.FloatTensor`, optional
+            Amplitude to scale each light curve by, by default no scaling will be
+            applied
+
+        Returns
+        -------
+        `torch.FloatTensor`
+            Model spectra
+        `torch.FloatTensor`
+            Model photometry
+        """
         phases = (
             (times - ref_times[:, None])
             / (1 + redshifts[:, None])
@@ -715,6 +927,28 @@ class ParsnipModel(nn.Module):
         return ref_times, color, encoding
 
     def forward(self, light_curves, sample=True, to_numpy=False):
+        """Run a set of light curves through the full ParSNIP model
+
+        We use variational inference to predict the latent representation of each light
+        curve, and we then use the generative model to predict the light curves for
+        those representations.
+
+        Parameters
+        ----------
+        light_curves : List[`astropy.table.Table`]
+            List of light curves
+        sample : bool, optional
+            If True (default), sample from the posterior distribution. If False, use the
+            MAP.
+        to_numpy : bool, optional
+            Whether to convert the outputs to numpy arrays, by default False
+
+        Returns
+        -------
+        dict
+            Result dictionary. If to_numpy is True, all of the elements will be numpy
+            arrays. Otherwise, they will be PyTorch tensors on the model's device.
+        """
         # Extract the data that we need and move it to the right device.
         input_data, compare_data, redshifts, band_indices = self._get_data(light_curves)
 
@@ -778,6 +1012,24 @@ class ParsnipModel(nn.Module):
         return amplitude_mu, amplitude_logvar
 
     def loss_function(self, result, return_components=False):
+        """Compute the loss function for a set of light curves
+
+        Parameters
+        ----------
+        result : dict
+            Output of `ParsnipModel.forward`
+        return_components : bool, optional
+            Whether to return the individual parts of the loss function, by default
+            False
+
+        Returns
+        -------
+        float or `torch.FloatTensor`
+            If return_components is False, return a single value representing the loss
+            function for a set of light curves. If return_components is True, then we
+            return a set of four values representing the negative log likelihood, the KL
+            divergence, the regularization penalty, and the amplitude probability.
+        """
         # Reconstruction likelihood
         nll = torch.sum(0.5 * result['obs_weight'] *
                         (result['obs_flux'] - result['model_flux'])**2)
@@ -814,6 +1066,9 @@ class ParsnipModel(nn.Module):
             Number of rounds to use for evaluation. VAEs are stochastic, so the loss
             function is not deterministic. By running for multiple rounds, the
             uncertainty on the loss function can be decreased. Default 1.
+        return_components : bool, optional
+            Whether to return the individual parts of the loss function, by default
+            False. See `ParsnipModel.loss_function` for details.
 
         Returns
         -------
@@ -844,7 +1099,19 @@ class ParsnipModel(nn.Module):
         return loss
 
     def fit(self, dataset, max_epochs=1000, augment=True, test_dataset=None):
-        """Fit the model to a lcdata dataset"""
+        """Fit the model to a dataset
+
+        Parameters
+        ----------
+        dataset : `lcdata.Dataset`
+            Dataset to fit to
+        max_epochs : int, optional
+            Maximum number of epochs, by default 1000
+        augment : bool, optional
+            Whether to use augmentation, by default True
+        test_dataset : `lcdata.Dataset`, optional
+            Test dataset that will be scored at the end of each epoch, by default None
+        """
         # The model is stochastic, so the loss function will have a fair bit of noise.
         # If the dataset is small, we run through several augmentations of it every
         # epoch to get the noise down.
@@ -916,6 +1183,8 @@ class ParsnipModel(nn.Module):
         ----------
         light_curves : `astropy.table.Table` or List[`astropy.table.Table`]
             Light curve(s) to generate predictions for.
+        augment : bool, optional
+            Whether to augment the light curve(s), by default False
 
         Returns
         -------
@@ -1181,6 +1450,32 @@ class ParsnipModel(nn.Module):
 
     def predict_light_curve(self, light_curve, sample=False, count=None, sampling=1.,
                             pad=50.):
+        """Predict the flux of a light curve on a grid
+
+        Parameters
+        ----------
+        light_curve : `astropy.table.Table`
+            Light curve to predict
+        sample : bool, optional
+            If True, sample from the latent variable posteriors. Otherwise,
+            use the MAP. By default False.
+        count : int, optional
+            Number of light curves to predict, by default None (single prediction)
+        sampling : int, optional
+            Grid sampling in days, by default 1.
+        pad : int, optional
+            Number of days before and after the light curve observations to predict the
+            light curve at, by default 50.
+
+        Returns
+        -------
+        `numpy.ndarray`
+            Times that the model was sampled at
+        `numpy.ndarray`
+            Flux of the model in each band
+        `numpy.ndarray`
+            Model result from ParsnipModel.forward
+        """
         # Figure out where to sample the light curve
         min_time = np.min(light_curve['time']) - pad
         max_time = np.max(light_curve['time']) + pad
@@ -1205,7 +1500,25 @@ class ParsnipModel(nn.Module):
         return model_times, model_flux, model_result
 
     def predict_spectrum(self, light_curve, time, sample=False, count=None):
-        """Predict the spectrum of an object at a given time"""
+        """Predict the spectrum of a light curve at a given time
+
+        Parameters
+        ----------
+        light_curve : `astropy.table.Table`
+            Light curve
+        time : float
+            Time to predict the spectrum at
+        sample : bool, optional
+            If True, sample from the latent variable posteriors. Otherwise,
+            use the MAP. By default False.
+        count : int, optional
+            Number of spectra to predict, by default None (single prediction)
+
+        Returns
+        -------
+        `numpy.ndarray`
+            Predicted spectrum at the wavelengths specified by `ParsnipModel.model_wave`
+        """
         pred_times = [time]
         pred_bands = [0]
 
@@ -1216,7 +1529,26 @@ class ParsnipModel(nn.Module):
         return model_spectra[..., 0]
 
     def predict_sncosmo(self, light_curve, sample=False):
-        """Package the predictions for a light curve as an sncosmo model."""
+        """Package the predictions for a light curve as an sncosmo model
+
+        This method performs variational inference on a light curve to predict its
+        latent representation. It then initializes an SNCosmo model with that
+        representation.
+
+        Parameters
+        ----------
+        light_curve : `astropy.table.Table`
+            Light curve
+        sample : bool, optional
+            If True, sample from the latent variable posteriors. Otherwise,
+            use the MAP. By default False.
+
+        Returns
+        -------
+        `ParsnipSncosmoModel`
+            SNCosmo model initialized with the light curve's predicted latent
+            representation
+        """
         if not light_curve.meta.get('parsnip_preprocessed', False):
             light_curve = preprocess_light_curve(light_curve, self.settings)
 

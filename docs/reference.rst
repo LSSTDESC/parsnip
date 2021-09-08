@@ -63,6 +63,7 @@ Datasets
 
    load_dataset
    load_datasets
+   parse_dataset
 
 *Parsers for specific instruments*
 

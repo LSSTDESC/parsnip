@@ -7,7 +7,21 @@ SIDEREAL_SCALE = 86400. / 86164.0905
 
 
 def _determine_time_grid(light_curve):
-    """Determine the time grid that will be used for the observations."""
+    """Determine the time grid that will be used for a light curve
+
+    ParSNIP evaluates all light curves on a grid internally for the encoder. This
+    function determines where to line up that grid.
+
+    Parameters
+    ----------
+    light_curve : `astropy.table.Table`
+        Light curve
+
+    Returns
+    -------
+    float
+        Reference time for the time grid
+    """
     time = light_curve['time']
     sidereal_time = time * SIDEREAL_SCALE
 
@@ -56,17 +70,56 @@ def _determine_time_grid(light_curve):
 
 
 def time_to_grid(time, reference_time):
-    """Convert a time in the original units to one on the internal grid"""
+    """Convert a time in the original units to one on the internal ParSNIP grid
+
+    Parameters
+    ----------
+    time : float
+        Real time to convert
+    reference_time : float
+        Reference time for the grid
+
+    Returns
+    -------
+    float
+        Time on the internal grid
+    """
     return (time - reference_time) * SIDEREAL_SCALE
 
 
 def grid_to_time(grid_time, reference_time):
-    """Convert a time on the internal grid to a time in the original units"""
+    """Convert a time on the internal grid to a time in the original units
+
+    Parameters
+    ----------
+    grid_time : float
+        Time on the internal grid
+    reference_time : float
+        Reference time for the grid
+
+    Returns
+    -------
+    float
+        Time in original units
+    """
     return grid_time / SIDEREAL_SCALE + reference_time
 
 
 def preprocess_light_curve(light_curve, settings):
-    """Preprocess the light curve and package it as needed for ParSNIP"""
+    """Preprocess a light curve for the ParSNIP model
+
+    Parameters
+    ----------
+    light_curve : `astropy.Table`
+        Raw light curve
+    settings : dict
+        ParSNIP model settings
+
+    Returns
+    -------
+    `astropy.Table`
+        Preprocessed light curve
+    """
     if light_curve.meta.get('parsnip_preprocessed', False):
         # Already preprocessed
         return light_curve

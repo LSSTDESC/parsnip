@@ -10,6 +10,16 @@ def extract_top_classifications(classifications):
     """Extract the top classification for each row a classifications Table.
 
     This is a bit complicated when working with astropy Tables.
+
+    Parameters
+    ----------
+    classifications : `astropy.table.Table`
+        Classifications table output from a `Classifier`
+
+    Returns
+    -------
+    `numpy.array`
+        numpy array with the top type for each light curve
     """
     types = classifications.colnames[1:]
     dtype = classifications[types[0]].dtype
@@ -24,6 +34,18 @@ def weighted_multi_logloss(true_types, classifications):
 
     This is the metric used for the PLAsTiCC challenge (with class weights set to 1)
     as described in Malz et al. 2019
+
+    Parameters
+    ----------
+    true_types : `numpy.array`
+        True types for each object
+    classifications : `astropy.table.Table`
+        Classifications table output from a `Classifier`
+
+    Returns
+    -------
+    [type]
+        [description]
     """
     total_logloss = 0.
     unique_types = np.unique(true_types)
@@ -40,6 +62,7 @@ def weighted_multi_logloss(true_types, classifications):
 
 
 class Classifier():
+    """LightGBM classifier that operates on ParSNIP predictions"""
     def __init__(self):
         # Keys to use
         self.keys = [
@@ -57,11 +80,48 @@ class Classifier():
         ]
 
     def extract_features(self, predictions):
+        """Extract features used for classification
+
+        The features to use are specified by the `keys` attribute.
+
+        Parameters
+        ----------
+        predictions : `astropy.table.Table`
+            Predictions output from `ParsnipModel.predict_dataset`
+
+        Returns
+        -------
+        `numpy.array`
+            Extracted features that will be used for classification
+        """
         return np.array([predictions[i].data for i in self.keys]).T
 
     def train(self, predictions, num_folds=10, labels=None, target_label=None,
               reweight=True, min_child_weight=1000.):
-        """Train a classifier on the predictions from a VAE model."""
+        """Train a classifier on the predictions from a ParSNIP model
+
+        Parameters
+        ----------
+        predictions : `astropy.table.Table`
+            Predictions output from `ParsnipModel.predict_dataset`
+        num_folds : int, optional
+            Number of K-folds to use, by default 10
+        labels : List[str], optional
+            True labels for each light curve, by default None
+        target_label : str, optional
+            If specified, do one-vs-all classification for the given label, by default
+            None
+        reweight : bool, optional
+            If true, weight all light curves so that each type has the same total
+            weight, by default True
+        min_child_weight : float, optional
+            `min_child_weight` parameter for LightGBM, by default 1000
+
+        Returns
+        -------
+        `astropy.table.Table`
+            K-folding out-of-sample predictions for each light curve
+        """
         print("Training classifier with keys:")
         for key in self.keys:
             print(f"    {key}")
@@ -185,10 +245,22 @@ class Classifier():
         return classifications
 
     def classify(self, predictions):
-        """Classify objects using predictions from a VAE model.
+        """Classify light curves using predictions from a `ParsnipModel`
 
         If the classifier was trained with K-folding, we average the classification
         probabilities over all folds.
+
+        Parameters
+        ----------
+        predictions : `astropy.table.Table`
+            Predictions output from `ParsnipModel.predict_dataset`
+
+        Returns
+        -------
+        Returns
+        -------
+        `astropy.table.Table`
+            Predictions for each light curve
         """
         features = self.extract_features(predictions)
 
@@ -206,18 +278,33 @@ class Classifier():
 
         return classifications
 
-    def write(self, name):
-        path = f'./classifiers/classifier_{name}.pkl'
+    def write(self, path):
+        """Write the classifier out to disk
 
-        os.makedirs('./classifiers', exist_ok=True)
+        Parameters
+        ----------
+        path : str
+            Path to write to
+        """
+        os.makedirs(os.path.dirname(path), exist_ok=True)
 
         with open(path, 'wb') as f:
             pickle.dump(self, f)
 
     @classmethod
-    def load(cls, name):
-        path = f'./classifiers/classifier_{name}.pkl'
+    def load(cls, path):
+        """Load a classifier that was saved to disk
 
+        Parameters
+        ----------
+        path : str
+            Path where the classifier was saved
+
+        Returns
+        -------
+        `Classifier`
+            Loaded classifier
+        """
         with open(path, 'rb') as f:
             classifier = pickle.load(f)
 

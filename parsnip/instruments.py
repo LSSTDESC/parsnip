@@ -44,11 +44,26 @@ band_info = {
 
 
 def calculate_band_mw_extinctions(bands):
-    """Calculate the MW extinction corrections to apply for each band.
+    """Calculate the Milky Way extinction corrections for a set of bands
 
     Multiply mwebv by these values to get the extinction that should be applied to
     each band for a specific light curve. For bands that have already been corrected, we
     set this value to 0.
+
+    Parameters
+    ----------
+    bands : List[str]
+        Bands to calculate the extinction for
+
+    Returns
+    -------
+    `numpy.array`
+        Milky Way extinction in each band
+
+    Raises
+    ------
+    KeyError
+        If any bands are not available in band_info in instruments.py
     """
     band_mw_extinctions = []
 
@@ -73,7 +88,23 @@ def calculate_band_mw_extinctions(bands):
 
 
 def should_correct_background(bands):
-    """Figure out if we should correct the background levels for each band."""
+    """Determine if we should correct the background levels for a set of bands
+
+    Parameters
+    ----------
+    bands : List[str]
+        Bands to lookup
+
+    Returns
+    -------
+    `numpy.array`
+        Boolean for each band indicating if it needs background correction
+
+    Raises
+    ------
+    KeyError
+        If any bands are not available in band_info in instruments.py
+    """
     band_correct_background = []
 
     for band_name in bands:
@@ -82,7 +113,7 @@ def should_correct_background(bands):
             should_correct = band_info[band_name][0]
         except KeyError:
             raise KeyError(f"Can't handle band {band_name}. Add it to band_info in "
-                           "settings.py")
+                           "instruments.py")
 
         band_correct_background.append(should_correct)
 
@@ -101,6 +132,11 @@ def get_band_plot_color(band):
     ----------
     band : str
         Name of the band to use.
+
+    Returns
+    -------
+    str
+        Matplotlib color to use when plotting the band
     """
     if band in band_info:
         return band_info[band][2]
@@ -125,6 +161,11 @@ def get_band_plot_marker(band):
     ----------
     band : str
         Name of the band to use.
+
+    Returns
+    -------
+    str
+        Matplotlib marker to use when plotting the band
     """
     if band in band_info:
         return band_info[band][3]
@@ -133,7 +174,18 @@ def get_band_plot_marker(band):
 
 
 def parse_ps1(dataset):
-    """Parse a PanSTARRS-1 dataset"""
+    """Parse a PanSTARRS-1 dataset
+
+    Parameters
+    ----------
+    dataset : `lcdata.Dataset`
+        PanSTARRS-1 dataset to parse
+
+    Returns
+    -------
+    `lcdata.Dataset`
+        Parsed dataset
+    """
     # Throw out light curves that don't have good redshifts or are otherwise bad.
     dataset = dataset[dataset.meta['unsupervised']]
 
@@ -158,7 +210,18 @@ def parse_ps1(dataset):
 
 
 def parse_ztf(dataset):
-    """Parse a ZTF dataset"""
+    """Parse a ZTF dataset
+
+    Parameters
+    ----------
+    dataset : `lcdata.Dataset`
+        ZTF dataset to parse
+
+    Returns
+    -------
+    `lcdata.Dataset`
+        Parsed dataset
+    """
     # Throw out light curves that don't have good redshifts.
     dataset = dataset[~dataset.meta['redshift'].isnull()]
 
@@ -269,7 +332,18 @@ def parse_ztf(dataset):
 
 
 def parse_plasticc(dataset):
-    """Parse a PLAsTiCC dataset"""
+    """Parse a PLAsTiCC dataset
+
+    Parameters
+    ----------
+    dataset : `lcdata.Dataset`
+        PLAsTiCC dataset to parse
+
+    Returns
+    -------
+    `lcdata.Dataset`
+        Parsed dataset
+    """
     # Throw out light curves that don't look like supernovae
     valid_classes = [
         'SNIa',
@@ -301,11 +375,27 @@ def parse_plasticc(dataset):
 def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
     """Parse a dataset from the lcdata package.
 
-    We cut out observations that are not relevant for this model (e.g. galactic ones),
-    and update the class labels.
+    We cut out observations that are not relevant for the ParSNIP model (e.g. galactic
+    ones), and update the class labels.
 
     We try to guess the kind of dataset from the filename. If this doesn't work, specify
     the kind explicitly instead.
+
+    Parameters
+    ----------
+    dataset : `lcdata.Dataset`
+        Dataset to parse
+    path_or_name : str, optional
+        Name of the dataset, or path to it, by default None
+    kind : str, optional
+        Kind of dataset, by default None
+    verbose : bool, optional
+        If true, print parsing information, by default True
+
+    Returns
+    -------
+    `lcdata.Dataset`
+        Parsed dataset
     """
     if kind is None and path_or_name is not None:
         # Parse the dataset to figure out what we need to do with it.
@@ -354,6 +444,23 @@ def load_dataset(path, kind=None, in_memory=True, verbose=True):
 
     We try to guess the dataset type from the filename. If this doesn't work, specify
     the filename explicitly instead.
+
+    Parameters
+    ----------
+    path : str
+        Path to the dataset on disk
+    kind : str, optional
+        Kind of dataset, by default we will attempt to determine it from the filename
+    in_memory : bool, optional
+        If False, don't load the light curves into memory, and only load the metadata.
+        See `lcdata.Dataset` for details.
+    verbose : bool, optional
+        If True, print parsing information, by default True
+
+    Returns
+    -------
+    `lcdata.Dataset`
+        Loaded dataset
     """
     dataset = lcdata.read_hdf5(path, in_memory=in_memory)
     dataset = parse_dataset(dataset, path, kind=kind, verbose=verbose)
@@ -361,11 +468,24 @@ def load_dataset(path, kind=None, in_memory=True, verbose=True):
     return dataset
 
 
-def load_datasets(dataset_names, verbose=True):
-    """Load a list of datasets and merge them"""
+def load_datasets(dataset_paths, verbose=True):
+    """Load a list of datasets and merge them
+
+    Parameters
+    ----------
+    dataset_paths : List[str]
+        Paths to each dataset to load
+    verbose : bool, optional
+        If True, print parsing information, by default True
+
+    Returns
+    -------
+    `lcdata.Dataset`
+        Loaded dataset
+    """
     # Load the dataset(s).
     datasets = []
-    for dataset_name in dataset_names:
+    for dataset_name in dataset_paths:
         datasets.append(load_dataset(dataset_name, verbose=verbose))
 
     # Add all of the datasets together
@@ -377,7 +497,20 @@ def load_datasets(dataset_names, verbose=True):
 def split_train_test(dataset):
     """Split a dataset into training and testing parts.
 
-    We train on 90%, and test on 10%.
+    We train on 90%, and test on 10%. We use a fixed algorithm to split the train and
+    test so that we don't have to keep track of what we did.
+
+    Parameters
+    ----------
+    dataset : `lcdata.Dataset`
+        Dataset to split
+
+    Returns
+    -------
+    `lcdata.Dataset`
+        Training dataset
+    `lcdata.Dataset`
+        Test dataset
     """
     # Keep part of the dataset for validation
     train_mask = np.ones(len(dataset), dtype=bool)
@@ -404,7 +537,7 @@ def get_band_effective_wavelength(band):
 
     Returns
     -------
-    effective_wavelength
+    float
         Effective wavelength of the band.
     """
     return sncosmo.get_bandpass(band).wave_eff
@@ -420,7 +553,7 @@ def get_bands(dataset):
 
     Returns
     -------
-    bands
+    List[str]
         List of bands in the dataset sorted by effective wavelength
     """
     bands = set()
