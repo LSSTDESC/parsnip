@@ -14,7 +14,7 @@ def _determine_time_grid(light_curve):
 
     Parameters
     ----------
-    light_curve : `astropy.table.Table`
+    light_curve : `~astropy.table.Table`
         Light curve
 
     Returns
@@ -110,14 +110,14 @@ def preprocess_light_curve(light_curve, settings):
 
     Parameters
     ----------
-    light_curve : `astropy.Table`
+    light_curve : `~astropy.Table`
         Raw light curve
     settings : dict
         ParSNIP model settings
 
     Returns
     -------
-    `astropy.Table`
+    `~astropy.Table`
         Preprocessed light curve
     """
     if light_curve.meta.get('parsnip_preprocessed', False):

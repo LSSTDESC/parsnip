@@ -13,7 +13,7 @@ def extract_top_classifications(classifications):
 
     Parameters
     ----------
-    classifications : `astropy.table.Table`
+    classifications : `~astropy.table.Table`
         Classifications table output from a `Classifier`
 
     Returns
@@ -37,10 +37,10 @@ def weighted_multi_logloss(true_types, classifications):
 
     Parameters
     ----------
-    true_types : `numpy.array`
+    true_types : `~numpy.ndarray`
         True types for each object
-    classifications : `astropy.table.Table`
-        Classifications table output from a `Classifier`
+    classifications : `~astropy.table.Table`
+        Classifications table output from a `~Classifier`
 
     Returns
     -------
@@ -86,12 +86,12 @@ class Classifier():
 
         Parameters
         ----------
-        predictions : `astropy.table.Table`
+        predictions : `~astropy.table.Table`
             Predictions output from `ParsnipModel.predict_dataset`
 
         Returns
         -------
-        `numpy.array`
+        `~numpy.ndarray`
             Extracted features that will be used for classification
         """
         return np.array([predictions[i].data for i in self.keys]).T
@@ -102,7 +102,7 @@ class Classifier():
 
         Parameters
         ----------
-        predictions : `astropy.table.Table`
+        predictions : `~astropy.table.Table`
             Predictions output from `ParsnipModel.predict_dataset`
         num_folds : int, optional
             Number of K-folds to use, by default 10
@@ -119,7 +119,7 @@ class Classifier():
 
         Returns
         -------
-        `astropy.table.Table`
+        `~astropy.table.Table`
             K-folding out-of-sample predictions for each light curve
         """
         print("Training classifier with keys:")
@@ -245,21 +245,21 @@ class Classifier():
         return classifications
 
     def classify(self, predictions):
-        """Classify light curves using predictions from a `ParsnipModel`
+        """Classify light curves using predictions from a `~ParsnipModel`
 
         If the classifier was trained with K-folding, we average the classification
         probabilities over all folds.
 
         Parameters
         ----------
-        predictions : `astropy.table.Table`
+        predictions : `~astropy.table.Table`
             Predictions output from `ParsnipModel.predict_dataset`
 
         Returns
         -------
         Returns
         -------
-        `astropy.table.Table`
+        `~astropy.table.Table`
             Predictions for each light curve
         """
         features = self.extract_features(predictions)
@@ -302,7 +302,7 @@ class Classifier():
 
         Returns
         -------
-        `Classifier`
+        `~Classifier`
             Loaded classifier
         """
         with open(path, 'rb') as f:

@@ -28,9 +28,9 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
 
     Parameters
     ----------
-    light_curve : `astropy.table.Table`
+    light_curve : `~astropy.table.Table`
         Light curve to plot
-    model : `ParsnipModel`, optional
+    model : `~ParsnipModel`, optional
         ParSNIP model to show, by default None
     count : int, optional
         Number of samples from the ParSNIP model, by default 100
@@ -43,7 +43,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         Percentile for the uncertainty bands, by default 68
     normalize_flux : bool, optional
         Whether to normalize the flux, by default False
-    sncosmo_model : `sncosmo.Model`, optional
+    sncosmo_model : `~sncosmo.Model`, optional
         SNCosmo model to show, by default None
     sncosmo_label : str, optional
         Legend label for the SNCosmo model, by default 'SNCosmo Model'
@@ -175,9 +175,9 @@ def normalize_spectrum_flux(wave, flux, min_wave=5500., max_wave=6500.):
 
     Parameters
     ----------
-    wave : `numpy.ndarray`
+    wave : `~numpy.ndarray`
         Wavelengths
-    flux : `numpy.ndarray`
+    flux : `~numpy.ndarray`
         Flux values
     min_wave : float, optional
         Minimum wavelength to consider for normalization, by default 5500.
@@ -186,7 +186,7 @@ def normalize_spectrum_flux(wave, flux, min_wave=5500., max_wave=6500.):
 
     Returns
     -------
-    `numpy.ndarray`
+    `~numpy.ndarray`
         Normalized flux
     """
     cut = (wave > min_wave) & (wave < max_wave)
@@ -203,9 +203,9 @@ def plot_spectrum(light_curve, model, time, count=100, show_uncertainty_bands=Tr
 
     Parameters
     ----------
-    light_curve : `astropy.table.Table`
+    light_curve : `~astropy.table.Table`
         Light curve
-    model : `ParsnipModel`
+    model : `~ParsnipModel`
         Model to use for the prediction
     time : float
         Time to predict the spectrum at
@@ -292,9 +292,9 @@ def plot_spectra(light_curve, model, times=[0., 10., 20., 30.], flux_scale=1.,
 
     Parameters
     ----------
-    light_curve : `astropy.table.Table`
+    light_curve : `~astropy.table.Table`
         Light curve
-    model : `ParsnipModel`
+    model : `~ParsnipModel`
         Model to use for the predictions
     times : list, optional
         Times to predict the spectra at, by default [0., 10., 20., 30.]
@@ -302,7 +302,7 @@ def plot_spectra(light_curve, model, times=[0., 10., 20., 30.], flux_scale=1.,
         Scale to multiple the flux by, by default 1.
     ax : axis, optional
         Matplotlib axis, by default None
-    sncosmo_model : `sncosmo.Model`, optional
+    sncosmo_model : `~sncosmo.Model`, optional
         SNCosmo model to overplot, by default None
     sncosmo_label : str, optional
         Label for the SNCosmo model, by default 'SNCosmo Model'
@@ -357,9 +357,9 @@ def plot_sne_space(light_curve, model, name, min_wave=10000., max_wave=0., time_
 
     Parameters
     ----------
-    light_curve : `astropy.table.Table`
+    light_curve : `~astropy.table.Table`
         Light curve
-    model : `ParsnipModel`
+    model : `~ParsnipModel`
         ParSNIP Model to use for the prediction
     name : str
         Name of the light curve on sne.space
@@ -481,10 +481,10 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
 
     Parameters
     ----------
-    predictions : `astropy.table.Table`
-        Predictions from `ParsnipModel.predict_dataset`
-    classifications : `astropy.table.Table`
-        Classifications from a `Classifier`
+    predictions : `~astropy.table.Table`
+        Predictions from `~ParsnipModel.predict_dataset`
+    classifications : `~astropy.table.Table`
+        Classifications from a `~Classifier`
     figsize : tuple, optional
         Figure size, by default (5, 4)
     title : str, optional
@@ -546,11 +546,11 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
 
     Parameters
     ----------
-    predictions : `astropy.table.Table`
-        Predictions for a dataset from `ParsnipModel.predict_dataset`
+    predictions : `~astropy.table.Table`
+        Predictions for a dataset from `~ParsnipModel.predict_dataset`
     plot_labels : List[str]
         Labels for each of the classes
-    mask : `np.array`, optional
+    mask : `~np.array`, optional
         Mask to apply to the predictions, by default None
     idx1 : int, optional
         Intrinsic latent variable to plot on the x axis, by default 1

@@ -7,7 +7,7 @@ def nmad(x):
 
     Parameters
     ----------
-    x : `numpy.ndarray`
+    x : `~numpy.ndarray`
         Data to calculate the NMAD of
 
     Returns

@@ -153,7 +153,7 @@ def build_default_argparse(description):
 
     Returns
     -------
-    `argparse.ArgumentParser`
+    `~argparse.ArgumentParser`
         Argument parser with the ParSNIP model settings added as arguments
     """
     parser = argparse.ArgumentParser(description=description)

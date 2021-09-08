@@ -57,7 +57,7 @@ def calculate_band_mw_extinctions(bands):
 
     Returns
     -------
-    `numpy.array`
+    `~numpy.ndarray`
         Milky Way extinction in each band
 
     Raises
@@ -97,7 +97,7 @@ def should_correct_background(bands):
 
     Returns
     -------
-    `numpy.array`
+    `~numpy.ndarray`
         Boolean for each band indicating if it needs background correction
 
     Raises
@@ -178,12 +178,12 @@ def parse_ps1(dataset):
 
     Parameters
     ----------
-    dataset : `lcdata.Dataset`
+    dataset : `~lcdata.Dataset`
         PanSTARRS-1 dataset to parse
 
     Returns
     -------
-    `lcdata.Dataset`
+    `~lcdata.Dataset`
         Parsed dataset
     """
     # Throw out light curves that don't have good redshifts or are otherwise bad.
@@ -214,12 +214,12 @@ def parse_ztf(dataset):
 
     Parameters
     ----------
-    dataset : `lcdata.Dataset`
+    dataset : `~lcdata.Dataset`
         ZTF dataset to parse
 
     Returns
     -------
-    `lcdata.Dataset`
+    `~lcdata.Dataset`
         Parsed dataset
     """
     # Throw out light curves that don't have good redshifts.
@@ -336,7 +336,7 @@ def parse_plasticc(dataset):
 
     Parameters
     ----------
-    dataset : `lcdata.Dataset`
+    dataset : `~lcdata.Dataset`
         PLAsTiCC dataset to parse
 
     Returns
@@ -383,7 +383,7 @@ def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
 
     Parameters
     ----------
-    dataset : `lcdata.Dataset`
+    dataset : `~lcdata.Dataset`
         Dataset to parse
     path_or_name : str, optional
         Name of the dataset, or path to it, by default None
@@ -394,7 +394,7 @@ def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
 
     Returns
     -------
-    `lcdata.Dataset`
+    `~lcdata.Dataset`
         Parsed dataset
     """
     if kind is None and path_or_name is not None:
@@ -438,7 +438,7 @@ def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
 def load_dataset(path, kind=None, in_memory=True, verbose=True):
     """Load a dataset using the lcdata package.
 
-    This can be any lcdata HDF5 dataset. We use `parse_dataset` to clean things up for
+    This can be any lcdata HDF5 dataset. We use `~parse_dataset` to clean things up for
     ParSNIP by rejecting irrelevant light curves (e.g. galactic ones) and updating class
     labels.
 
@@ -459,7 +459,7 @@ def load_dataset(path, kind=None, in_memory=True, verbose=True):
 
     Returns
     -------
-    `lcdata.Dataset`
+    `~lcdata.Dataset`
         Loaded dataset
     """
     dataset = lcdata.read_hdf5(path, in_memory=in_memory)
@@ -480,7 +480,7 @@ def load_datasets(dataset_paths, verbose=True):
 
     Returns
     -------
-    `lcdata.Dataset`
+    `~lcdata.Dataset`
         Loaded dataset
     """
     # Load the dataset(s).
@@ -502,14 +502,14 @@ def split_train_test(dataset):
 
     Parameters
     ----------
-    dataset : `lcdata.Dataset`
+    dataset : `~lcdata.Dataset`
         Dataset to split
 
     Returns
     -------
-    `lcdata.Dataset`
+    `~lcdata.Dataset`
         Training dataset
-    `lcdata.Dataset`
+    `~lcdata.Dataset`
         Test dataset
     """
     # Keep part of the dataset for validation
@@ -548,7 +548,7 @@ def get_bands(dataset):
 
     Parameters
     ----------
-    dataset : `lcdata.Dataset`
+    dataset : `~lcdata.Dataset`
         Dataset to retrieve the bands from
 
     Returns

@@ -14,7 +14,7 @@ class ParsnipSncosmoSource(sncosmo.Source):
 
     Parameters
     ----------
-    model : `ParsnipModel` or str, optional
+    model : `~ParsnipModel` or str, optional
         ParSNIP model to use, or path to a model on disk.
     """
     def __init__(self, model=None):
