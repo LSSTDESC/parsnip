@@ -2,6 +2,8 @@
 
 A generative model of transient light curves
 
+[![Documentation Status](https://readthedocs.org/projects/parsnip/badge/?version=latest)](https://parsnip.readthedocs.io/en/latest/?badge=latest)
+
 ## About
 
 ParSNIP learns a generative model of transients from a large dataset
@@ -12,5 +14,5 @@ in this code can be found in Boone 2021 (in prep.).
 
 ## Installation and Usage
 
-This package depends on the [avocado](https://github.com/kboone/avocado) codebase.
-TODO: detailed instructions.
+Instructions on how to install and use ParSNIP can be found on the [ParSNIP
+readthedocs page](https://parsnip.readthedocs.io/en/latest/).
