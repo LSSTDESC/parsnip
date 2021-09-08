@@ -14,6 +14,7 @@ estimation, and identifying novel transients.
 
    installation
    usage
+   sncosmo
    reference
 
 Source code: https://github.com/kboone/parsnip

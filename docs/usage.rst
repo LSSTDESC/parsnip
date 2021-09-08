@@ -43,8 +43,18 @@ using it to generate predictions and plots. To load a model in Python::
     >>> import parsnip
     >>> model = parsnip.load_model('/path/to/model.h5')
 
+There are several built-in models included that can be loaded by specifying their name.
+Currently, these are:
+
+* `plasticc` trained on the PLAsTiCC dataset.
+* `ps1` trained on the PS1 dataset from Villar et al. 2020.
+
+To load one of these built-in models::
+
+    >>> model = parsnip.load_model('plasticc')
+
 Assuming that you have a light curve in `sncosmo` format, some examples of what can be
-done with this model include:
+done with a model include:
 
 Predict the latent representation of a light curve::
 
