@@ -2,6 +2,8 @@ import argparse
 
 from .instruments import calculate_band_mw_extinctions, should_correct_background
 
+default_model = 'plasticc'
+
 default_settings = {
     'model_version': 1,
 

@@ -4,6 +4,8 @@ import os
 import sncosmo
 import torch
 
+import parsnip
+
 from .light_curve import SIDEREAL_SCALE
 
 
@@ -12,10 +14,13 @@ class ParsnipSncosmoSource(sncosmo.Source):
 
     Parameters
     ----------
-    model : `ParsnipModel`
-        ParSNIP model to use
+    model : `ParsnipModel` or str, optional
+        ParSNIP model to use, or path to a model on disk.
     """
-    def __init__(self, model):
+    def __init__(self, model=None):
+        if not isinstance(model, parsnip.ParsnipModel):
+            model = parsnip.load_model(model)
+
         self._model = model
 
         model_name = os.path.splitext(os.path.basename(model.path))[0]

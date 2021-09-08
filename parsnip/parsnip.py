@@ -9,6 +9,7 @@ from astropy.cosmology import Planck18
 import astropy.table
 import extinction
 import sncosmo
+import pkg_resources
 import lcdata
 
 import torch
@@ -20,7 +21,7 @@ from torch.utils.data import DataLoader
 from .light_curve import preprocess_light_curve, grid_to_time, time_to_grid, \
     SIDEREAL_SCALE
 from .utils import frac_to_mag, parse_device
-from .settings import parse_settings
+from .settings import parse_settings, default_model
 from .sncosmo import ParsnipSncosmoSource
 
 
@@ -1578,13 +1579,14 @@ class ParsnipModel(nn.Module):
         return model
 
 
-def load_model(path, device='cpu', threads=8):
+def load_model(path=None, device='cpu', threads=8):
     """Load a ParSNIP model.
 
     Parameters
     ----------
-    path : str
-        Path to the model on disk
+    path : str, optional
+        Path to the model on disk, or name of a model. If not specified, the
+        default_model specified in settings.py is loaded.
     device : str, optional
         Torch device to load the model to, by default 'cpu'
     threads : int, optional
@@ -1595,6 +1597,19 @@ def load_model(path, device='cpu', threads=8):
     `ParsnipModel`
         Loaded model
     """
+    if path is None:
+        path = default_model
+        print(f"Loading default ParSNIP model '{path}'")
+
+    # Figure out if we were given the path to a model or a built-in model.
+    if '.' not in path:
+        # We were given the name of a built-in model.
+        resource_path = f'models/{path}.pt'
+        full_path = pkg_resources.resource_filename('parsnip', resource_path)
+        if not os.path.exists(full_path):
+            raise ValueError(f"No built-in model named '{path}'")
+        path = full_path
+
     # Load the model data
     use_device = parse_device(device)
     settings, state_dict = torch.load(path, use_device)
