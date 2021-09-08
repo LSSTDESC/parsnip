@@ -13,7 +13,7 @@ copyright = '2021, Kyle Boone'
 author = 'Kyle Boone'
 
 # The full version, including alpha/beta/rc tags
-release = importlib.metadata.version('parsnip')
+release = importlib.metadata.version('astro-parsnip')
 
 
 # -- General configuration ---------------------------------------------------
