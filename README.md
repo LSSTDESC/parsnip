@@ -1,6 +1,6 @@
 # ParSNIP
 
-A generative model of transient light curves
+Deep generative modeling of astronomical transient light curves
 
 [![Documentation Status](https://readthedocs.org/projects/parsnip/badge/?version=latest)](https://parsnip.readthedocs.io/en/latest/?badge=latest)
 
