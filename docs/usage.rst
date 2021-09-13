@@ -34,6 +34,33 @@ dataset and a pretrained ParSNIP model. To run it::
 will generate predictions to the file named `predictions.h5` using the dataset
 `dataset.h5` and the model `model.h5`.
 
+Loading a dataset in Python
+===========================
+
+ParSNIP is designed to work with `lcdata` datasets. `lcdata` datasets are guaranteed to
+be in a specific format, but they may include instrument-specific quirks, light curves
+that are not compatible with ParSNIP, or metadata in unusual formats (e.g. PLAsTiCC
+types are random integers). ParSNIP includes tools to clean up datasets from a range of
+different surveys and reject invalid light curves. Given an `lcdata` dataset, this can
+be done with::
+
+    >>> dataset = parsnip.parse_dataset(raw_dataset, kind='ps1')
+
+Here `kind` specifies the type of dataset, in this case one from PanSTARRS-1. Currently
+supported options include:
+
+* ps1
+* ztf
+* plasticc
+
+A convenience function is also included to read `lcdata` datasets in HDF5 format and
+parse them automatically::
+
+    >>> dataset = parsnip.load_dataset('/path/to/data.h5')
+
+This function will attempt to determine the dataset kind from the filename. This can be
+overridden with the `kind` keyword as in the previous example.
+
 Loading a model in Python
 =========================
 
