@@ -88,7 +88,7 @@ To classify light curves, we first need to predict their representations using a
 model. This can be done either with the `parsnip_predict` script described previously or
 by operating in memory on an `lcdata` Dataset object::
 
-    >>> predictions = parsnip.predict_dataset(dataset)
+    >>> predictions = model.predict_dataset(dataset)
     >>> print(predictions)
     object_id    ra      dec     ...       s3        s3_error 
     --------- -------- --------  ... ------------- -----------
