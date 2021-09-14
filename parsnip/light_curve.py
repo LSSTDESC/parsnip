@@ -1,3 +1,4 @@
+import lcdata
 import numpy as np
 import scipy.stats
 
@@ -105,7 +106,7 @@ def grid_to_time(grid_time, reference_time):
     return grid_time / SIDEREAL_SCALE + reference_time
 
 
-def preprocess_light_curve(light_curve, settings):
+def preprocess_light_curve(light_curve, settings, raise_on_invalid=True):
     """Preprocess a light curve for the ParSNIP model
 
     Parameters
@@ -114,15 +115,46 @@ def preprocess_light_curve(light_curve, settings):
         Raw light curve
     settings : dict
         ParSNIP model settings
+    raise_on_invalid : bool
+        Whether to raise a ValueError for invalid light curves. If False, None is
+        returned instead. By default, True.
 
     Returns
     -------
     `~astropy.Table`
         Preprocessed light curve
+
+    Raises
+    ------
+    ValueError
+        For any invalid light curves that cannot be handled by ParSNIP if
+        raise_on_invalid is True. The error message will describe why the light curve is
+        invalid.
     """
     if light_curve.meta.get('parsnip_preprocessed', False):
         # Already preprocessed
         return light_curve
+
+    # Parse the light curve with lcdata to ensure that all of the columns/metadata have
+    # standard names.
+    try:
+        light_curve = lcdata.parse_light_curve(light_curve)
+    except ValueError as e:
+        if raise_on_invalid:
+            raise
+        else:
+            lcdata.utils.warn_first_time("invalid_lc_format",
+                                         f"Failed to parse light curve: {e}")
+            return None
+
+    # We require that the light curve has a valid redshift.
+    if not np.isfinite(light_curve.meta['redshift']):
+        message = "No redshift available for light curve."
+        if raise_on_invalid:
+            raise ValueError(message)
+        else:
+            lcdata.utils.warn_first_time("missing_redshift", message)
+            return None
 
     # Align the observations to a grid in sidereal time.
     reference_time = _determine_time_grid(light_curve)
@@ -165,9 +197,19 @@ def preprocess_light_curve(light_curve, settings):
     band_mask = new_lc['band_index'] != -1
     new_lc = new_lc[band_mask & time_mask]
 
+    if len(new_lc) == 0:
+        # No valid observations for this light curve.
+        message = (f"Light curve has no usable observations! Valid bands are "
+                   f"{settings['bands']}.")
+        if raise_on_invalid:
+            raise ValueError(message)
+        else:
+            lcdata.utils.warn_first_time("unusable_observations", message)
+            return None
+
     # Correct for Milky Way extinction if desired.
     band_extinctions = (
-        settings['band_mw_extinctions'] * new_lc.meta['mwebv']
+        settings['band_mw_extinctions'] * new_lc.meta.get('mwebv', 0.)
     )
     extinction_scales = 10**(0.4 * band_extinctions[new_lc['band_index']])
     new_lc['flux'] *= extinction_scales

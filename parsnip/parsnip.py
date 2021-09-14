@@ -395,11 +395,15 @@ class ParsnipModel(nn.Module):
                                 desc="Preprocessing dataset")
 
             # Run on a single core without multiprocessing
-            preprocessed_light_curves = [preprocess_light_curve(lc, self.settings) for
-                                         lc in iterator]
+            preprocessed_light_curves = []
+            for lc in iterator:
+                preprocessed_light_curves.append(
+                    preprocess_light_curve(lc, self.settings, raise_on_invalid=False)
+                )
         else:
             # Run with multiprocessing in multiple threads.
-            func = functools.partial(preprocess_light_curve, settings=self.settings)
+            func = functools.partial(preprocess_light_curve, settings=self.settings,
+                                     raise_on_invalid=False)
 
             with multiprocessing.Pool(self.threads) as p:
                 iterator = p.imap(func, dataset.light_curves, chunksize=chunksize)
@@ -407,6 +411,18 @@ class ParsnipModel(nn.Module):
                     iterator = tqdm(iterator, total=len(dataset.light_curves),
                                     file=sys.stdout, desc="Preprocessing dataset")
                 preprocessed_light_curves = list(iterator)
+
+        # Check if any light curves failed to process
+        none_count = 0
+        for lc in preprocessed_light_curves:
+            if lc is None:
+                none_count += 1
+        if none_count > 0:
+            print(f"WARNING: Rejecting {none_count}/{len(preprocessed_light_curves)} "
+                  "light curves. Consider using 'parsnip.parse_dataset()' to parse "
+                  "the dataset and hopefully avoid this.")
+            preprocessed_light_curves = [i for i in preprocessed_light_curves if i is
+                                         not None]
 
         dataset = lcdata.from_light_curves(preprocessed_light_curves)
         return dataset
