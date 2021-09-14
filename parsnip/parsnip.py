@@ -419,8 +419,9 @@ class ParsnipModel(nn.Module):
                 none_count += 1
         if none_count > 0:
             print(f"WARNING: Rejecting {none_count}/{len(preprocessed_light_curves)} "
-                  "light curves. Consider using 'parsnip.parse_dataset()' to parse "
-                  "the dataset and hopefully avoid this.")
+                  "light curves. Consider using 'parsnip.load_dataset()' or "
+                  "'parsnip.parse_dataset()' to load/parse the dataset and hopefully "
+                  "avoid this.")
             preprocessed_light_curves = [i for i in preprocessed_light_curves if i is
                                          not None]
 
