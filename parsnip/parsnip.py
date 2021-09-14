@@ -1354,23 +1354,31 @@ class ParsnipModel(nn.Module):
         predictions = astropy.table.hstack([meta, predictions], 'exact')
 
         # Estimate the absolute luminosity (assuming a zeropoint of 25).
+        # Figure out which light curves we can calculate the luminosity for.
         amplitudes = predictions['amplitude'].copy()
-        amplitude_mask = amplitudes <= 0.
-        amplitudes[amplitude_mask] = 1.
+        amplitude_mask = amplitudes > 0.
+        redshifts = predictions['redshift'].copy()
+        redshift_mask = redshifts > 0.
+        frac_diff = predictions['amplitude_error'] / amplitudes
+        amplitude_error_mask = frac_diff < 1.
+        luminosity_mask = amplitude_mask & redshift_mask & amplitude_error_mask
+
+        # Mask out invalid data for luminosities
+        redshifts[~luminosity_mask] = 1.
+        amplitudes[~luminosity_mask] = 1.
+        frac_diff[~luminosity_mask] = 0.5
+
         luminosity = (
             -2.5*np.log10(amplitudes)
             + 25.
-            - Planck18.distmod(predictions['redshift']).value
+            - Planck18.distmod(redshifts).value
         )
-        luminosity[amplitude_mask] = np.nan
+        luminosity[~luminosity_mask] = np.nan
         predictions['luminosity'] = luminosity
 
         # Luminosity uncertainty
-        frac_diff = predictions['amplitude_error'] / amplitudes
-        frac_diff[amplitude_mask] = 0.5
-        frac_diff[frac_diff > 0.5] = 0.5
         int_mag_err = frac_to_mag(frac_diff)
-        int_mag_err[amplitude_mask] = -1.
+        int_mag_err[~luminosity_mask] = np.nan
         predictions['luminosity_error'] = int_mag_err
 
         # Remove the processing flag.
