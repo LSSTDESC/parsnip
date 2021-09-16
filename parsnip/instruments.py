@@ -222,12 +222,20 @@ def parse_ztf(dataset):
     `~lcdata.Dataset`
         Parsed dataset
     """
-    # Throw out light curves that don't have good redshifts.
-    dataset = dataset[~dataset.meta['redshift'].isnull()]
+    lcs = []
+    for lc in dataset.light_curves:
+        # Throw out light curves that don't have valid redshifts.
+        if np.isnan(lc.meta['redshift']):
+            continue
 
-    # Throw out observations with zero flux.
-    print("WARNING: Some ZTF datasets replace lower limits with a flux of zero."
-          "This is bad, and is not currently supported!")
+        # Some ZTF datasets replace lower limits with a flux of zero. This is bad. Throw
+        # out all of those observations.
+        lc = lc[(lc['flux'] != 0.) & (lc['fluxerr'] != 0.)]
+        if len(lc) == 0:
+            continue
+
+        lcs.append(lc)
+    dataset = lcdata.from_light_curves(lcs)
 
     # Clean up labels
     types = [str(i).replace(' ', '').replace('?', '') for i in dataset.meta['type']]
@@ -248,7 +256,7 @@ def parse_ztf(dataset):
         'LINER': 'Galaxy',
         'LRN': 'Star',
         'NLS1': 'Galaxy',
-        'None': 'Bad',
+        'None': 'Unknown',
         'Nova': 'Star',
         'Q': 'Galaxy',
         'QSO': 'Galaxy',
@@ -306,12 +314,8 @@ def parse_ztf(dataset):
         'varstar': 'Star',
     }
 
-    dataset.meta['label'] = [label_map[i] for i in types]
-
-    # Update the label on each object.
-    if dataset.objects is not None:
-        for obj, label in zip(dataset.objects, dataset.meta['label']):
-            obj.meta['label'] = label
+    dataset.meta['original_type'] = dataset.meta['type']
+    dataset.meta['type'] = [label_map[i] for i in types]
 
     # Drop light curves that aren't supernova-like
     valid_classes = [
@@ -326,7 +330,7 @@ def parse_ztf(dataset):
         # 'Bad',
         'Peculiar',
     ]
-    dataset = dataset[dataset.meta['label'].isin(valid_classes)]
+    dataset = dataset[np.isin(dataset.meta['type'], valid_classes)]
 
     return dataset
 
