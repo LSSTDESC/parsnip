@@ -17,6 +17,7 @@ if __name__ == '__main__':
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--split_train_test', action='store_true')
+    parser.add_argument('--bands', default=None)
 
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--threads', default=8, type=int)
@@ -36,9 +37,17 @@ if __name__ == '__main__':
     # Load the dataset(s).
     dataset = parsnip.load_datasets(args['dataset_paths'])
 
+    # Figure out which bands we want to use for the model. If specific ones were
+    # specified on the command line, use those. Otherwise, use all available bands.
+    bands = args.pop('bands')
+    if bands is None:
+        bands = parsnip.get_bands(dataset)
+    else:
+        bands = bands.split(',')
+
     model = parsnip.ParsnipModel(
         model_path,
-        parsnip.get_bands(dataset),
+        bands,
         device=args['device'],
         threads=args['threads'],
         settings=args,
