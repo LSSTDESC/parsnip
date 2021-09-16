@@ -531,11 +531,13 @@ class ParsnipModel(nn.Module):
         """
         redshifts = []
 
-        data = []
-        batch_indices = []
-
         compare_data = []
         compare_band_indices = []
+
+        # Build a grid for the input
+        grid_flux = np.zeros((len(light_curves), len(self.settings['bands']),
+                              self.settings['time_window']))
+        grid_weights = np.zeros_like(grid_flux)
 
         for idx, lc in enumerate(light_curves):
             # Convert the table to a numpy recarray. This is much faster to work with.
@@ -560,15 +562,17 @@ class ParsnipModel(nn.Module):
             lc_data['flux'] /= lc_meta['parsnip_scale']
             lc_data['fluxerr'] /= lc_meta['parsnip_scale']
 
-            data.append(lc_data)
+            # Calculate weights with an error floor included. Note that this typically a
+            # very large number. For the comparison this doesn't matter, but for the
+            # input we scale it by the error floor so that it becomes a number between 0
+            # and 1.
+            weights = 1 / (lc_data['fluxerr']**2 + self.settings['error_floor']**2)
 
-            # Batch indices
-            lc_batch_indices = np.ones_like(lc_data['band_index']) * idx
-            batch_indices.append(lc_batch_indices)
-
-            # Calculate weights for the compare data with an error floor included.
-            compare_weights = 1 / (lc_data['fluxerr']**2 +
-                                   self.settings['error_floor']**2)
+            # Fill in the input array.
+            grid_flux[idx, lc_data['band_index'], lc_data['time_index']] = \
+                lc_data['flux']
+            grid_weights[idx, lc_data['band_index'], lc_data['time_index']] = \
+                self.settings['error_floor']**2 * weights
 
             # Stack all of the data that will be used for comparisons and convert it to
             # a torch tensor.
@@ -576,30 +580,13 @@ class ParsnipModel(nn.Module):
                 lc_data['grid_time'],
                 lc_data['flux'],
                 lc_data['fluxerr'],
-                compare_weights,
+                weights,
             ]))
             compare_data.append(obj_compare_data.T)
             compare_band_indices.append(torch.LongTensor(lc_data['band_index'].copy()))
 
         # Gather the input data.
         redshifts = np.array(redshifts)
-        data = np.concatenate(data)
-        batch_indices = np.concatenate(batch_indices)
-
-        # Build a grid for the input
-        grid_flux = np.zeros((len(light_curves), len(self.settings['bands']),
-                              self.settings['time_window']))
-        grid_weights = np.zeros_like(grid_flux)
-
-        grid_flux[batch_indices, data['band_index'], data['time_index']] = data['flux']
-
-        # Use the inverse of the fluxerr squared with an error floor as a weight. We
-        # rescale the weight so that it is between 0 (for a poorly measured observation)
-        # and 1 (for a very well-measured observation).
-        grid_weights[batch_indices, data['band_index'], data['time_index']] = (
-            self.settings['error_floor']**2 / (data['fluxerr']**2 +
-                                               self.settings['error_floor']**2)
-        )
 
         # Stack the input data
         if self.settings['input_redshift']:
