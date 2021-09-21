@@ -69,7 +69,7 @@ if __name__ == '__main__':
     rounds = int(np.ceil(25000 / len(train_dataset)))
 
     train_score = model.score(train_dataset, rounds=rounds)
-    if args['use_train_test']:
+    if args['split_train_test']:
         test_score = model.score(test_dataset, rounds=10 * rounds)
     else:
         test_score = -1.
