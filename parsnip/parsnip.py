@@ -1414,20 +1414,24 @@ class ParsnipModel(nn.Module):
         predictions = astropy.table.vstack(predictions, 'exact')
         return predictions
 
-    def _predict_time_series(self, lc, pred_times, pred_bands, sample, count):
+    def _predict_time_series(self, light_curve, pred_times, pred_bands, sample, count):
+        # Preprocess the light curve if it wasn't already.
+        light_curve = preprocess_light_curve(light_curve, self.settings)
+
         # Convert given times to our internal times.
-        grid_times = time_to_grid(pred_times, lc.meta['parsnip_reference_time'])
+        grid_times = time_to_grid(pred_times,
+                                  light_curve.meta['parsnip_reference_time'])
 
         grid_times = torch.FloatTensor(grid_times)[None, :].to(self.device)
         pred_bands = torch.LongTensor(pred_bands)[None, :].to(self.device)
 
         if count is not None:
             # Predict multiple light curves
-            light_curves = [lc] * count
+            light_curves = [light_curve] * count
             grid_times = grid_times.repeat(count, 1)
             pred_bands = pred_bands.repeat(count, 1)
         else:
-            light_curves = [lc]
+            light_curves = [light_curve]
 
         # Sample VAE parameters
         result = self.forward(light_curves, sample)
@@ -1456,8 +1460,8 @@ class ParsnipModel(nn.Module):
         cpu_result = {k: v.detach().cpu().numpy() for k, v in result.items()}
 
         # Scale everything to the original light curve scale.
-        model_flux *= lc.meta['parsnip_scale']
-        model_spectra *= lc.meta['parsnip_scale']
+        model_flux *= light_curve.meta['parsnip_scale']
+        model_spectra *= light_curve.meta['parsnip_scale']
 
         return model_flux, model_spectra, cpu_result
 
@@ -1563,8 +1567,7 @@ class ParsnipModel(nn.Module):
             SNCosmo model initialized with the light curve's predicted latent
             representation
         """
-        if not light_curve.meta.get('parsnip_preprocessed', False):
-            light_curve = preprocess_light_curve(light_curve, self.settings)
+        light_curve = preprocess_light_curve(light_curve, self.settings)
 
         # Run through the model to predict parameters.
         result = self.forward([light_curve], sample=sample, to_numpy=True)
