@@ -135,6 +135,8 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
     if sncosmo_model is not None:
         model_times = np.arange(sncosmo_model.mintime(), sncosmo_model.maxtime(), 0.5)
 
+        label_model = True
+
         for band_idx, band_name in enumerate(model.settings['bands']):
             if band_name not in used_bandpasses and not show_missing_bandpasses:
                 continue
@@ -148,8 +150,9 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
                 continue
 
             c = get_band_plot_color(band_name)
-            if band_idx == 0:
+            if label_model:
                 label = sncosmo_label
+                label_model = False
             else:
                 label = None
 
