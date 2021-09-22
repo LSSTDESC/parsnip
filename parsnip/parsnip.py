@@ -1683,7 +1683,8 @@ class ParsnipModel(nn.Module):
 
         return sample_redshifts, prob
 
-    def predict_redshift(self, light_curve):
+    def predict_redshift(self, light_curve, min_redshift=0., max_redshift=None,
+                         sampling=0.01):
         """Predict the redshift of a light curve.
 
         This evaluates the MAP estimate of the redshift.
@@ -1698,8 +1699,12 @@ class ParsnipModel(nn.Module):
         float
             MAP estimate of the redshift
         """
-        redshifts, redshift_distribution = \
-            self.predict_redshift_distribution(light_curve)
+        redshifts, redshift_distribution = self.predict_redshift_distribution(
+            light_curve,
+            min_redshift=min_redshift,
+            max_redshift=max_redshift,
+            sampling=sampling
+        )
         return redshifts[np.argmax(redshift_distribution)]
 
 
