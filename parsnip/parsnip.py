@@ -1362,13 +1362,13 @@ class ParsnipModel(nn.Module):
         amplitude_mask = amplitudes > 0.
         redshifts = predictions['redshift'].copy()
         redshift_mask = redshifts > 0.
-        frac_diff = predictions['amplitude_error'] / amplitudes
-        amplitude_error_mask = frac_diff < 1.
+        amplitude_error_mask = predictions['amplitude_error'] < 0.5 * amplitudes
         luminosity_mask = amplitude_mask & redshift_mask & amplitude_error_mask
 
         # Mask out invalid data for luminosities
         redshifts[~luminosity_mask] = 1.
         amplitudes[~luminosity_mask] = 1.
+        frac_diff = predictions['amplitude_error'] / amplitudes
         frac_diff[~luminosity_mask] = 0.5
 
         luminosity = (
