@@ -1614,9 +1614,26 @@ class ParsnipModel(nn.Module):
                                       max_redshift=None, sampling=0.01):
         """Predict the redshift distribution for a light curve.
 
-        This computes the distribution p(redshift | data) under the assumption of a flat
-        prior distribution on the redshift. We evaluate that distribution on a grid of
-        redshifts.
+        Given observations y, and latent variables s, we want to compute the redshift
+        distribution p(z|y) marginalized over the latent variables. Working this out
+        with Bayes' theorem::
+
+            p(z|y) = Integral[p(y|s,z) p(s,z) ds] / p(y)
+
+        p(y|s,z) is the term that we compute as the negative log-likelihood in our loss
+        function. We assume that p(s,z) is constant. p(y) just contributes an overall
+        normalization term and can be ignored.
+
+        The correct way to evaluate this function would be to perform a Monte Carlo
+        integration p(y|s,z) like we currently do to marginalize over the amplitude.
+        However, that procedure is stochastic and requires many computations to average
+        out. Here we instead approximate p(z|y) by simply evaluating p(y|s,z) at the MAP
+        value of the model parameters. This is not correct, but should provide a
+        reasonable approximation to the integral in most cases and only requires a
+        single evaluation per redshift.
+
+        We evaluate this approximate redshift distribution on a prespecified grid of
+        redshifts and normalize so that the distribution sums to 1.
 
         Parameters
         ----------
