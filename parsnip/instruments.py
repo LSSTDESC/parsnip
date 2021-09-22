@@ -173,7 +173,7 @@ def get_band_plot_marker(band):
         return 'o'
 
 
-def parse_ps1(dataset):
+def parse_ps1(dataset, reject_invalid=True, verbose=True):
     """Parse a PanSTARRS-1 dataset
 
     Parameters
@@ -186,13 +186,23 @@ def parse_ps1(dataset):
     `~lcdata.Dataset`
         Parsed dataset
     """
-    # Throw out light curves that don't have good redshifts or are otherwise bad.
-    dataset = dataset[dataset.meta['unsupervised']]
+    if reject_invalid:
+        # Throw out light curves that don't have good redshifts or are otherwise bad.
+        if verbose:
+            num_invalid = np.sum(~dataset.meta['unsupervised'])
+            print(f"Rejecting {num_invalid} flagged light curves.")
+        dataset = dataset[dataset.meta['unsupervised']]
 
-    # Labels to use for classification
+    # Labels to use for classification. Note that all of the non-supernova-like light
+    # curves get rejected by the previous cut from Villar et al. 2020.
     label_map = {
-        'Unknown': 'Unknown',
+        'AGN': 'AGN',
+        'Bad': 'Bad',
+        'Bad (rise)': 'Bad',
         'FELT': 'FELT',
+        'FELT (Bronze)': 'FELT',
+        'Lensed SNIa': 'Lensed SNIa',
+        'QSO': 'QSO',
         'SLSN': 'SLSN',
         'SNII': 'SNII',
         'SNIIb?': 'SNII',
@@ -203,13 +213,16 @@ def parse_ps1(dataset):
         'SNIbc (Ic)': 'SNIbc',
         'SNIbc (Ic-BL)': 'SNIbc',
         'SNIbn': 'SNIbc',
+        'TDE': 'TDE',
+        'Unknown': 'Unknown',
+        'VAR': 'VAR'
     }
     dataset.meta['type'] = [label_map[i] for i in dataset.meta['type']]
 
     return dataset
 
 
-def parse_ztf(dataset):
+def parse_ztf(dataset, reject_invalid=True, verbose=True):
     """Parse a ZTF dataset
 
     Parameters
@@ -223,18 +236,18 @@ def parse_ztf(dataset):
         Parsed dataset
     """
     lcs = []
+    invalid_count = 0
     for lc in dataset.light_curves:
-        # Throw out light curves that don't have valid redshifts.
-        if np.isnan(lc.meta['redshift']):
-            continue
-
         # Some ZTF datasets replace lower limits with a flux of zero. This is bad. Throw
-        # out all of those observations.
+        # out all of those observations because we can't handle them.
         lc = lc[(lc['flux'] != 0.) & (lc['fluxerr'] != 0.)]
         if len(lc) == 0:
+            invalid_count += 1
             continue
 
         lcs.append(lc)
+    if verbose:
+        print(f"Rejecting {invalid_count} light curves with no good observations.")
     dataset = lcdata.from_light_curves(lcs)
 
     # Clean up labels
@@ -330,12 +343,16 @@ def parse_ztf(dataset):
         # 'Bad',
         'Peculiar',
     ]
-    dataset = dataset[np.isin(dataset.meta['type'], valid_classes)]
+    if reject_invalid:
+        mask = np.isin(dataset.meta['type'], valid_classes)
+        if verbose:
+            print(f"Rejecting {np.sum(~mask)} non-supernova-like light curves.")
+        dataset = dataset[mask]
 
     return dataset
 
 
-def parse_plasticc(dataset):
+def parse_plasticc(dataset, reject_invalid=True, verbose=True):
     """Parse a PLAsTiCC dataset
 
     Parameters
@@ -371,12 +388,17 @@ def parse_plasticc(dataset):
         # 'muLens-String',
     ]
 
-    dataset = dataset[np.isin(dataset.meta['type'], valid_classes)]
+    if reject_invalid:
+        mask = np.isin(dataset.meta['type'], valid_classes)
+        if verbose:
+            print(f"Rejecting {np.sum(~mask)} non-supernova-like light curves.")
+        dataset = dataset[mask]
 
     return dataset
 
 
-def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
+def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
+                  verbose=True):
     """Parse a dataset from the lcdata package.
 
     We cut out observations that are not relevant for the ParSNIP model (e.g. galactic
@@ -393,6 +415,8 @@ def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
         Name of the dataset, or path to it, by default None
     kind : str, optional
         Kind of dataset, by default None
+    reject_invalid : bool, optional
+        Whether to reject invalid light curves, by default True
     verbose : bool, optional
         If true, print parsing information, by default True
 
@@ -422,12 +446,21 @@ def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
                       "Specify how to parse it in instruments.py if necessary.")
             kind = 'default'
 
+    # Throw out light curves that don't have valid redshifts.
+    if reject_invalid:
+        redshift_mask = np.isnan(dataset.meta['redshift'])
+        if np.any(redshift_mask):
+            if verbose:
+                print(f"Rejecting {np.sum(redshift_mask)} light curves with missing "
+                      "redshifts.")
+            dataset = dataset[~redshift_mask]
+
     if kind == 'ps1':
-        dataset = parse_ps1(dataset)
+        dataset = parse_ps1(dataset, reject_invalid, verbose)
     elif kind == 'plasticc':
-        dataset = parse_plasticc(dataset)
+        dataset = parse_plasticc(dataset, reject_invalid, verbose)
     elif kind == 'ztf':
-        dataset = parse_ztf(dataset)
+        dataset = parse_ztf(dataset, reject_invalid, verbose)
     elif kind == 'default':
         # Don't do anything by default
         pass
@@ -436,10 +469,13 @@ def parse_dataset(dataset, path_or_name=None, kind=None, verbose=True):
             print(f"Unknown dataset type '{kind}'. Using default parsing. "
                   "Specify how to parse it in instruments.py if necessary.")
 
+    if verbose:
+        print(f"Dataset contains {len(dataset)} light curves.")
+
     return dataset
 
 
-def load_dataset(path, kind=None, in_memory=True, verbose=True):
+def load_dataset(path, kind=None, in_memory=True, reject_invalid=True, verbose=True):
     """Load a dataset using the lcdata package.
 
     This can be any lcdata HDF5 dataset. We use `~parse_dataset` to clean things up for
@@ -458,6 +494,8 @@ def load_dataset(path, kind=None, in_memory=True, verbose=True):
     in_memory : bool, optional
         If False, don't load the light curves into memory, and only load the metadata.
         See `lcdata.Dataset` for details.
+    reject_invalid : bool, optional
+        Whether to reject invalid light curves, by default True
     verbose : bool, optional
         If True, print parsing information, by default True
 
@@ -467,7 +505,8 @@ def load_dataset(path, kind=None, in_memory=True, verbose=True):
         Loaded dataset
     """
     dataset = lcdata.read_hdf5(path, in_memory=in_memory)
-    dataset = parse_dataset(dataset, path, kind=kind, verbose=verbose)
+    dataset = parse_dataset(dataset, path, kind=kind, reject_invalid=reject_invalid,
+                            verbose=verbose)
 
     return dataset
 

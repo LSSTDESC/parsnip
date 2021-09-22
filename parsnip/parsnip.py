@@ -1016,7 +1016,7 @@ class ParsnipModel(nn.Module):
 
         return amplitude_mu, amplitude_logvar
 
-    def loss_function(self, result, return_components=False):
+    def loss_function(self, result, return_components=False, return_individual=False):
         """Compute the loss function for a set of light curves
 
         Parameters
@@ -1025,35 +1025,51 @@ class ParsnipModel(nn.Module):
             Output of `~ParsnipModel.forward`
         return_components : bool, optional
             Whether to return the individual parts of the loss function, by default
-            False
+            False.
+        return_individual : bool, optional
+            Whether to return the loss function for each light curve individually, by
+            default False.
 
         Returns
         -------
         float or `~torch.FloatTensor`
-            If return_components is False, return a single value representing the loss
-            function for a set of light curves. If return_components is True, then we
-            return a set of four values representing the negative log likelihood, the KL
-            divergence, the regularization penalty, and the amplitude probability.
+            If return_components and return_individual are False, return a single value
+            representing the loss function for a set of light curves.
+            If return_components is True, then we return a set of four values
+            representing the negative log likelihood, the KL divergence, the
+            regularization penalty, and the amplitude probability.
+            If return_individual is True, then we return the loss function for each
+            light curve individually.
         """
         # Reconstruction likelihood
-        nll = torch.sum(0.5 * result['obs_weight'] *
-                        (result['obs_flux'] - result['model_flux'])**2)
+        nll = (0.5 * result['obs_weight']
+               * (result['obs_flux'] - result['model_flux'])**2)
 
         # KL divergence
-        kld = -0.5 * torch.sum(1 + result['encoding_logvar'] -
-                               result['encoding_mu'].pow(2) -
-                               result['encoding_logvar'].exp())
+        kld = -0.5 * (1 + result['encoding_logvar']
+                      - result['encoding_mu'].pow(2)
+                      - result['encoding_logvar'].exp())
 
         # Regularization of spectra
         diff = (
             (result['model_spectra'][:, 1:, :] - result['model_spectra'][:, :-1, :])
             / (result['model_spectra'][:, 1:, :] + result['model_spectra'][:, :-1, :])
         )
-        penalty = self.settings['penalty'] * torch.sum(diff**2)
+        penalty = self.settings['penalty'] * diff**2
 
         # Amplitude probability for the importance sampling integral
-        amp_prob = -0.5 * torch.sum((result['amplitude'] - result['amplitude_mu'])**2 /
-                                    result['amplitude_logvar'].exp())
+        amp_prob = -0.5 * ((result['amplitude'] - result['amplitude_mu'])**2
+                           / result['amplitude_logvar'].exp())
+
+        if return_individual:
+            nll = torch.sum(nll, axis=1)
+            kld = torch.sum(kld, axis=1)
+            penalty = torch.sum(torch.sum(penalty, axis=2), axis=1)
+        else:
+            nll = torch.sum(nll)
+            kld = torch.sum(kld)
+            penalty = torch.sum(penalty)
+            amp_prob = torch.sum(amp_prob)
 
         if return_components:
             return torch.stack([nll, kld, penalty, amp_prob])
@@ -1593,6 +1609,81 @@ class ParsnipModel(nn.Module):
             model[f's{i+1}'] = result['encoding'][0, i]
 
         return model
+
+    def predict_redshift_distribution(self, light_curve, min_redshift=0.,
+                                      max_redshift=None, sampling=0.01):
+        """Predict the redshift distribution for a light curve.
+
+        This computes the distribution p(redshift | data) under the assumption of a flat
+        prior distribution on the redshift. We evaluate that distribution on a grid of
+        redshifts.
+
+        Parameters
+        ----------
+        light_curve : `~astropy.table.Table`
+            Light curve
+        min_redshift : float, optional
+            Minimum redshift to consider, by default 0.
+        max_redshift : float, optional
+            Maximum redshift to consider, by default specified by
+            settings['max_redshift'].
+        sampling : float, optional
+            Sampling to use, by default 0.01.
+
+        Returns
+        -------
+        `~numpy.ndarray`
+            Redshifts that the probability distribution was evaluated at
+        `~numpy.ndarray`
+            Redshift probability distribution
+        """
+        if max_redshift is None:
+            max_redshift = self.settings['max_redshift']
+        sample_redshifts = np.arange(min_redshift, max_redshift + sampling / 100.,
+                                     sampling)
+        if min_redshift == 0:
+            # Having the redshift be equal to zero can cause problems. Handle this
+            # gracefully.
+            sample_redshifts[0] = 0.0001
+
+        light_curve = preprocess_light_curve(light_curve, self.settings,
+                                             ignore_missing_redshift=True)
+
+        lcs = []
+        for redshift in sample_redshifts:
+            redshift_lc = light_curve.copy()
+            redshift_lc.meta['redshift'] = redshift
+            lcs.append(redshift_lc)
+
+        result = self.forward(lcs, sample=False)
+        nll = self.loss_function(result, return_individual=True,
+                                 return_components=True)[0]
+        nll = nll.detach().cpu().numpy()
+
+        # Normalize the probability distribution
+        prob = np.exp(-(nll - np.min(nll)))
+        prob = prob / np.sum(prob) / sampling
+
+        return sample_redshifts, prob
+
+    def predict_redshift(self, light_curve):
+        """Predict the redshift of a light curve.
+
+        This evaluates the MAP estimate of the redshift.
+
+        Parameters
+        ----------
+        light_curve : `~astropy.table.Table`
+            Light curve
+
+        Returns
+        -------
+        float
+            MAP estimate of the redshift
+        """
+        redshifts, redshift_distribution = \
+            self.predict_redshift_distribution(light_curve)
+        return redshifts[np.argmax(redshift_distribution)]
 
 
 def load_model(path=None, device='cpu', threads=8):

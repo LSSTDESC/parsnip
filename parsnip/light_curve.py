@@ -106,7 +106,8 @@ def grid_to_time(grid_time, reference_time):
     return grid_time / SIDEREAL_SCALE + reference_time
 
 
-def preprocess_light_curve(light_curve, settings, raise_on_invalid=True):
+def preprocess_light_curve(light_curve, settings, raise_on_invalid=True,
+                           ignore_missing_redshift=False):
     """Preprocess a light curve for the ParSNIP model
 
     Parameters
@@ -118,6 +119,9 @@ def preprocess_light_curve(light_curve, settings, raise_on_invalid=True):
     raise_on_invalid : bool
         Whether to raise a ValueError for invalid light curves. If False, None is
         returned instead. By default, True.
+    ignore_missing_redshift : bool
+        Whether to ignore missing redshifts, by default False. If False, a missing
+        redshift value will cause a light curve to be invalid.
 
     Returns
     -------
@@ -148,7 +152,7 @@ def preprocess_light_curve(light_curve, settings, raise_on_invalid=True):
             return None
 
     # We require that the light curve has a valid redshift.
-    if not np.isfinite(light_curve.meta['redshift']):
+    if not ignore_missing_redshift and not np.isfinite(light_curve.meta['redshift']):
         message = "No redshift available for light curve."
         if raise_on_invalid:
             raise ValueError(message)
