@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-import os
-import sys
-import parsnip
-import argparse
-import time
-import astropy.table
 from tqdm import tqdm
+import argparse
+import astropy.table
+import lcdata
+import os
+import parsnip
+import sys
+import time
 
 
 if __name__ == '__main__':
@@ -48,16 +49,20 @@ if __name__ == '__main__':
 
     # Parse the dataset in chunks. For large datasets, we can't fit them all in memory
     # at the same time.
-    chunk_size = args['chunk_size']
-    num_chunks = dataset.count_chunks(chunk_size)
+    if isinstance(dataset, lcdata.HDF5Dataset):
+        chunk_size = args['chunk_size']
+        num_chunks = dataset.count_chunks(chunk_size)
+        chunks = tqdm(dataset.iterate_chunks(chunk_size), total=num_chunks,
+                      file=sys.stdout)
+    else:
+        chunks = [dataset]
 
     # Optionally, the dataset can be augmented a given number of times.
     augments = args['augments']
 
     predictions = []
 
-    for chunk in tqdm(dataset.iterate_chunks(chunk_size), total=num_chunks,
-                      file=sys.stdout):
+    for chunk in chunks:
         # Preprocess the light curves
         chunk = model.preprocess(chunk, verbose=False)
 
