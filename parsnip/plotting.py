@@ -78,7 +78,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
         band_fluxerr = band_data['fluxerr'] * flux_scale
         band_time = band_time - reference_time
 
-        ax.errorbar(band_time, band_flux, band_fluxerr, fmt='o', c=c, label=band_name,
+        ax.errorbar(band_time, band_flux, band_fluxerr, ls='', c=c, label=band_name,
                     elinewidth=1, marker=marker)
 
         used_bandpasses.append(band_name)
@@ -645,7 +645,7 @@ def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx
                 xerr=type_predictions[f's{xidx}_error'][:max_count],
                 yerr=type_predictions[f's{yidx}_error'][:max_count],
                 label=type_name,
-                fmt='o',
+                ls='',
                 marker=marker,
                 markersize=markersize,
                 c=color,
