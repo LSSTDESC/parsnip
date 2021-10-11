@@ -186,12 +186,10 @@ def parse_ps1(dataset, reject_invalid=True, verbose=True):
     `~lcdata.Dataset`
         Parsed dataset
     """
-    if reject_invalid:
-        # Throw out light curves that don't have good redshifts or are otherwise bad.
-        if verbose:
-            num_invalid = np.sum(~dataset.meta['unsupervised'])
-            print(f"Rejecting {num_invalid} flagged light curves.")
-        dataset = dataset[dataset.meta['unsupervised']]
+    # Light curves in the unsupervised set from Villar et al. 2020 don't have valid
+    # redshifts.
+    dataset.meta['original_redshift'] = dataset.meta['redshift']
+    dataset.meta['redshift'][~dataset.meta['unsupervised']] = np.nan
 
     # Labels to use for classification. Note that all of the non-supernova-like light
     # curves get rejected by the previous cut from Villar et al. 2020.
@@ -398,7 +396,7 @@ def parse_plasticc(dataset, reject_invalid=True, verbose=True):
 
 
 def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
-                  verbose=True):
+                  require_redshift=False, verbose=True):
     """Parse a dataset from the lcdata package.
 
     We cut out observations that are not relevant for the ParSNIP model (e.g. galactic
@@ -446,15 +444,6 @@ def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
                       "Specify how to parse it in instruments.py if necessary.")
             kind = 'default'
 
-    # Throw out light curves that don't have valid redshifts.
-    if reject_invalid:
-        redshift_mask = np.isnan(dataset.meta['redshift'])
-        if np.any(redshift_mask):
-            if verbose:
-                print(f"Rejecting {np.sum(redshift_mask)} light curves with missing "
-                      "redshifts.")
-            dataset = dataset[~redshift_mask]
-
     if kind == 'ps1':
         dataset = parse_ps1(dataset, reject_invalid, verbose)
     elif kind == 'plasticc':
@@ -469,13 +458,23 @@ def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
             print(f"Unknown dataset type '{kind}'. Using default parsing. "
                   "Specify how to parse it in instruments.py if necessary.")
 
+    # Throw out light curves that don't have valid redshifts.
+    if require_redshift and reject_invalid:
+        redshift_mask = np.isnan(dataset.meta['redshift'])
+        if np.any(redshift_mask):
+            if verbose:
+                print(f"Rejecting {np.sum(redshift_mask)} light curves with missing "
+                      "redshifts.")
+            dataset = dataset[~redshift_mask]
+
     if verbose:
         print(f"Dataset contains {len(dataset)} light curves.")
 
     return dataset
 
 
-def load_dataset(path, kind=None, in_memory=True, reject_invalid=True, verbose=True):
+def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
+                 require_redshift=False, verbose=True):
     """Load a dataset using the lcdata package.
 
     This can be any lcdata HDF5 dataset. We use `~parse_dataset` to clean things up for
@@ -506,7 +505,7 @@ def load_dataset(path, kind=None, in_memory=True, reject_invalid=True, verbose=T
     """
     dataset = lcdata.read_hdf5(path, in_memory=in_memory)
     dataset = parse_dataset(dataset, path, kind=kind, reject_invalid=reject_invalid,
-                            verbose=verbose)
+                            require_redshift=require_redshift, verbose=verbose)
 
     return dataset
 

@@ -1337,8 +1337,15 @@ class ParsnipModel(nn.Module):
                 batch_predictions[f's{idx+1}_error'] = encoding_err[:, 2 + idx]
 
             if self.settings['predict_redshift']:
-                batch_predictions['predicted_redshift'] = np.exp(encoding_mu[:, -1] - 1)
-                batch_predictions['predicted_redshift_error'] = encoding_err[:, -1]
+                pred_redshift = np.clip(
+                    np.exp(encoding_mu[:, -1] - 1),
+                    0, self.settings['max_redshift']
+                )
+                pred_redshift_pos = np.exp(encoding_mu[:, -1] + encoding_err[:, -1] - 1)
+                pred_redshift_neg = np.exp(encoding_mu[:, -1] - encoding_err[:, -1] - 1)
+                pred_redshift_error = (pred_redshift_pos - pred_redshift_neg) / 2.
+                batch_predictions['predicted_redshift'] = pred_redshift
+                batch_predictions['predicted_redshift_error'] = pred_redshift_error
 
             # Calculate other useful features.
             time = result['time']
