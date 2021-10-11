@@ -2,6 +2,7 @@
 import numpy as np
 import os
 import sys
+
 import parsnip
 import time
 
@@ -35,7 +36,13 @@ if __name__ == '__main__':
             sys.exit()
 
     # Load the dataset(s).
-    dataset = parsnip.load_datasets(args['dataset_paths'])
+    if args['predict_redshift']:
+        require_redshift = False
+    else:
+        require_redshift = True
+
+    dataset = parsnip.load_datasets(args['dataset_paths'],
+                                    require_redshift=require_redshift)
 
     # Figure out which bands we want to use for the model. If specific ones were
     # specified on the command line, use those. Otherwise, use all available bands.

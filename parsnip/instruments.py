@@ -510,7 +510,8 @@ def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
     return dataset
 
 
-def load_datasets(dataset_paths, verbose=True):
+def load_datasets(dataset_paths, reject_invalid=True, require_redshift=False,
+                  verbose=True):
     """Load a list of datasets and merge them
 
     Parameters
@@ -528,7 +529,9 @@ def load_datasets(dataset_paths, verbose=True):
     # Load the dataset(s).
     datasets = []
     for dataset_name in dataset_paths:
-        datasets.append(load_dataset(dataset_name, verbose=verbose))
+        datasets.append(load_dataset(dataset_name, reject_invalid=reject_invalid,
+                                     require_redshift=require_redshift,
+                                     verbose=verbose))
 
     # Add all of the datasets together
     dataset = reduce(lambda i, j: i+j, datasets)

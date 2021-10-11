@@ -154,8 +154,9 @@ def preprocess_light_curve(light_curve, settings, raise_on_invalid=True,
     if (not settings['predict_redshift']
             and not ignore_missing_redshift
             and not np.isfinite(light_curve.meta['redshift'])):
-        # We require that the light curve has a valid redshift.
-        message = "No redshift available for light curve."
+        # For models that don't predict the redshift, we require that each light curve
+        # has a valid redshift.
+        message = "No redshift available for light curve and model requires redshift."
         if raise_on_invalid:
             raise ValueError(message)
         else:
