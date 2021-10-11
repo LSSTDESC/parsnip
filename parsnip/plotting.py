@@ -543,7 +543,7 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
 
 
 def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx3=None,
-                        max_count=1000, show_legend=True, legend_ncol=1, marker=None,
+                        max_count=1000, show_legend=True, legend_ncol=1, marker='o',
                         markersize=5, ax=None):
     """Plot the representation of a ParSNIP model
 
