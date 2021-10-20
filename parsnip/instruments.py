@@ -363,6 +363,12 @@ def parse_plasticc(dataset, reject_invalid=True, verbose=True):
     `lcdata.Dataset`
         Parsed dataset
     """
+    print("AAAAAAH" * 1000)
+    print("Updating redshift")
+    dataset.meta['true_redshift'] = dataset.meta['redshift']
+    dataset.meta['redshift'] = dataset.meta['hostgal_specz']
+    dataset.meta['redshift'][dataset.meta['redshift'] < 0] = np.nan
+
     # Throw out light curves that don't look like supernovae
     valid_classes = [
         'SNIa',

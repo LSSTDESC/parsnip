@@ -530,6 +530,8 @@ class ParsnipModel(nn.Module):
             Band indices for each observation that will be compared
         """
         redshifts = []
+        photozs = []
+        photoz_errors = []
 
         compare_data = []
         compare_band_indices = []
@@ -550,7 +552,11 @@ class ParsnipModel(nn.Module):
                 lc_data, lc_meta = lc
 
             # Extract the redshift.
+            # TODO: HACKED THIS TO USE PHOTOZ FOR PLASTICC! MAKE THE CHOICE OF KEYS
+            # USER-CONFIGURABLE.
             redshifts.append(lc_meta['redshift'])
+            photozs.append(lc_meta['hostgal_photoz'])
+            photoz_errors.append(lc_meta['hostgal_photoz_err'])
 
             # Mask out observations that are outside of our window.
             mask = (lc_data['time_index'] >= 0) & (lc_data['time_index'] <
@@ -587,11 +593,15 @@ class ParsnipModel(nn.Module):
 
         # Gather the input data.
         redshifts = np.array(redshifts)
+        photozs = np.array(photozs)
+        photoz_errors = np.array(photoz_errors)
 
         # Stack the input data
         if self.settings['input_redshift']:
             input_data = np.concatenate([
-                redshifts[:, None, None].repeat(self.settings['time_window'], axis=2),
+                photozs[:, None, None].repeat(self.settings['time_window'], axis=2),
+                photoz_errors[:, None, None].repeat(self.settings['time_window'],
+                                                    axis=2),
                 grid_flux,
                 grid_weights,
             ], axis=1)
@@ -622,7 +632,7 @@ class ParsnipModel(nn.Module):
     def _build_model(self):
         """Build the model"""
         if self.settings['input_redshift']:
-            input_size = len(self.settings['bands']) * 2 + 1
+            input_size = len(self.settings['bands']) * 2 + 2
         else:
             input_size = len(self.settings['bands']) * 2
 
@@ -1088,7 +1098,7 @@ class ParsnipModel(nn.Module):
             mask = torch.isnan(use_redshifts)
             use_redshifts[mask] = 0.
             diff_redshifts = result['predicted_redshift'] - use_redshifts
-            redshift_nll = 0.5 / 0.01**2 * diff_redshifts**2
+            redshift_nll = 0.5 / 0.05**2 * diff_redshifts**2
             redshift_nll[mask] = 0.
         else:
             redshift_nll = torch.zeros_like(amp_prob)
