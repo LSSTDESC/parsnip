@@ -1511,7 +1511,11 @@ class ParsnipModel(nn.Module):
 
         # Do the predictions
         if self.settings['predict_redshift']:
-            redshifts = result['predicted_redshift']
+            redshifts = torch.clone(result['predicted_redshift'])
+
+            # Use the true redshifts when we have them.
+            redshift_mask = ~torch.isnan(result['redshift'])
+            redshifts[redshift_mask] = result['redshift'][redshift_mask]
         else:
             redshifts = result['redshift']
 
