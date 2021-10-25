@@ -614,6 +614,8 @@ class ParsnipModel(nn.Module):
         # Convert to torch tensors
         input_data = torch.FloatTensor(input_data)
         redshifts = torch.FloatTensor(redshifts)
+        photozs = torch.FloatTensor(photozs)
+        photoz_errors = torch.FloatTensor(photoz_errors)
 
         # Pad all of the compare data to have the same shape.
         compare_data = nn.utils.rnn.pad_sequence(compare_data, batch_first=True)
@@ -625,9 +627,12 @@ class ParsnipModel(nn.Module):
         input_data = input_data.to(self.device)
         compare_data = compare_data.to(self.device)
         redshifts = redshifts.to(self.device)
+        photozs = photozs.to(self.device)
+        photoz_errors = photoz_errors.to(self.device)
         compare_band_indices = compare_band_indices.to(self.device)
 
-        return input_data, compare_data, redshifts, compare_band_indices
+        return (input_data, compare_data, redshifts, photozs, photoz_errors,
+                compare_band_indices)
 
     def _build_model(self):
         """Build the model"""
@@ -978,7 +983,8 @@ class ParsnipModel(nn.Module):
             arrays. Otherwise, they will be PyTorch tensors on the model's device.
         """
         # Extract the data that we need and move it to the right device.
-        input_data, compare_data, redshifts, band_indices = self._get_data(light_curves)
+        input_data, compare_data, redshifts, photozs, photoz_errors, band_indices = \
+            self._get_data(light_curves)
 
         # Encode the light curves.
         encoding_mu, encoding_logvar = self.encode(input_data)
@@ -1015,6 +1021,8 @@ class ParsnipModel(nn.Module):
             'encoding': encoding,
             'amplitude': amplitude,
             'redshift': redshifts,
+            'photoz': photozs,
+            'photoz_error': photoz_errors,
             'predicted_redshift': predicted_redshifts,
             'time': compare_data[:, 0],
             'obs_flux': compare_data[:, 1],
@@ -1094,12 +1102,15 @@ class ParsnipModel(nn.Module):
 
         # Redshift error
         if self.settings['predict_redshift']:
-            use_redshifts = torch.clone(result['redshift'])
-            mask = torch.isnan(use_redshifts)
-            use_redshifts[mask] = 0.
-            diff_redshifts = result['predicted_redshift'] - use_redshifts
-            redshift_nll = 0.5 / 0.05**2 * diff_redshifts**2
-            redshift_nll[mask] = 0.
+            # Prior from photoz estimate
+            photoz_diff = result['predicted_redshift'] - result['photoz']
+            redshift_nll = 0.5 * photoz_diff**2 / result['photoz_error']**2
+
+            # Prior from true redshift
+            mask = ~torch.isnan(result['redshift'])
+            diff_redshifts = (result['predicted_redshift'][mask]
+                              - result['redshift'][mask])
+            redshift_nll[mask] += 0.5 * diff_redshifts**2 / 0.05**2
         else:
             redshift_nll = torch.zeros_like(amp_prob)
 

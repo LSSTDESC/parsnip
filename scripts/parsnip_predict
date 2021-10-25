@@ -43,7 +43,7 @@ if __name__ == '__main__':
         threads=args['threads'],
     )
 
-    if args['predict_redshift']:
+    if model.settings['predict_redshift']:
         require_redshift = False
     else:
         require_redshift = True
