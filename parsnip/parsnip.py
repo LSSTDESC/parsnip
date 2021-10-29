@@ -532,6 +532,7 @@ class ParsnipModel(nn.Module):
         redshifts = []
         photozs = []
         photoz_errors = []
+        brightnesses = []
 
         compare_data = []
         compare_band_indices = []
@@ -568,6 +569,8 @@ class ParsnipModel(nn.Module):
             lc_data['flux'] /= lc_meta['parsnip_scale']
             lc_data['fluxerr'] /= lc_meta['parsnip_scale']
 
+            brightnesses.append(np.log10(lc_meta['parsnip_scale']))
+
             # Calculate weights with an error floor included. Note that this typically a
             # very large number. For the comparison this doesn't matter, but for the
             # input we scale it by the error floor so that it becomes a number between 0
@@ -595,6 +598,7 @@ class ParsnipModel(nn.Module):
         redshifts = np.array(redshifts)
         photozs = np.array(photozs)
         photoz_errors = np.array(photoz_errors)
+        brightnesses = np.array(brightnesses)
 
         # Stack the input data
         if self.settings['input_redshift']:
@@ -602,6 +606,8 @@ class ParsnipModel(nn.Module):
                 photozs[:, None, None].repeat(self.settings['time_window'], axis=2),
                 photoz_errors[:, None, None].repeat(self.settings['time_window'],
                                                     axis=2),
+                brightnesses[:, None, None].repeat(self.settings['time_window'],
+                                                   axis=2),
                 grid_flux,
                 grid_weights,
             ], axis=1)
@@ -637,7 +643,7 @@ class ParsnipModel(nn.Module):
     def _build_model(self):
         """Build the model"""
         if self.settings['input_redshift']:
-            input_size = len(self.settings['bands']) * 2 + 2
+            input_size = len(self.settings['bands']) * 2 + 3
         else:
             input_size = len(self.settings['bands']) * 2
 
@@ -743,6 +749,9 @@ class ParsnipModel(nn.Module):
         decode_layers.append(nn.Softplus())
 
         self.decode_layers = nn.Sequential(*decode_layers)
+
+        # if self.settings['predict_redshift']:
+            # self.redshift_loss = torch.nn.HuberLoss(reduction='none', delta=3.)
 
     def get_data_loader(self, dataset, augment=False, **kwargs):
         """Get a PyTorch DataLoader for an lcdata Dataset
@@ -1105,6 +1114,9 @@ class ParsnipModel(nn.Module):
             # Prior from photoz estimate
             photoz_diff = result['predicted_redshift'] - result['photoz']
             redshift_nll = 0.5 * photoz_diff**2 / result['photoz_error']**2
+            # photoz_pulls = photoz_diff / result['photoz_error']
+            # redshift_nll = self.redshift_loss(photoz_pulls,
+                                              # torch.zeros_like(photoz_pulls))
 
             # Prior from true redshift
             mask = ~torch.isnan(result['redshift'])
