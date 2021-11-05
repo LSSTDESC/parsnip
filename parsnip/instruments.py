@@ -29,8 +29,8 @@ band_info = {
     'lssty':        (True,      False,      'goldenrod',    's'),
 
     # ZTF
-    'ztfr':         (False,     True,       'C0',           'o'),
-    'ztfg':         (False,     True,       'C2',           '^'),
+    'ztfg':         (False,     True,       'C0',           'o'),
+    'ztfr':         (False,     True,       'C2',           '^'),
     'ztfi':         (False,     True,       'C1',           'v'),
 
     # SWIFT

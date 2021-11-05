@@ -6,7 +6,8 @@ import numpy as np
 
 from .light_curve import preprocess_light_curve
 from .classifier import extract_top_classifications
-from .instruments import get_band_plot_color, get_band_plot_marker
+from .instruments import get_band_effective_wavelength, get_band_plot_color, \
+    get_band_plot_marker
 
 
 def _get_reference_time(light_curve):
@@ -65,10 +66,14 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
 
     reference_time = _get_reference_time(light_curve)
 
+    # Group the observations by band, and order the bands by central wavelength.
     band_groups = light_curve.group_by('band').groups
-    for band_name, band_data in zip(band_groups.keys['band'], band_groups):
-        if len(band_data) == 0:
-            continue
+    band_dict = dict(zip(band_groups.keys['band'], band_groups))
+    band_order = sorted(band_dict.keys(), key=get_band_effective_wavelength)
+
+    # Plot the observations
+    for band_name in band_order:
+        band_data = band_dict[band_name]
 
         c = get_band_plot_color(band_name)
         marker = get_band_plot_marker(band_name)
@@ -83,6 +88,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
 
         used_bandpasses.append(band_name)
 
+    # Plot the model if we have one.
     if model is not None:
         max_model = 0.
         label_model = True
@@ -132,6 +138,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
 
         ax.set_ylim(-0.2 * max_model, 1.2 * max_model)
 
+    # Plot an SNCosmo model if we have one.
     if sncosmo_model is not None:
         model_times = np.arange(sncosmo_model.mintime(), sncosmo_model.maxtime(), 0.5)
 
