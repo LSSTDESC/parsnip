@@ -9,6 +9,7 @@ default_settings = {
 
     'predict_redshift': True,
     'input_redshift': True,
+    'predict_luminosity': True,
 
     'min_wave': 1000.,
     'max_wave': 11000.,
@@ -37,6 +38,7 @@ default_settings = {
     'encode_latent_prepool_architecture': [200],
     'encode_latent_postpool_architecture': [200],
     'decode_architecture': [40, 80, 160],
+    'luminosity_decode_architecture': [100, 100],
 
     # Settings that will be filled later.
     'derived_settings_calculated': None,
