@@ -324,6 +324,7 @@ def parse_ztf(dataset, reject_invalid=True, verbose=True):
         'unclassified': 'Unknown',
         'unk': 'Unknown',
         'unknown': 'Unknown',
+        'Unknown': 'Unknown',
         'varstar': 'Star',
     }
 
