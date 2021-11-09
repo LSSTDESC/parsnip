@@ -7,7 +7,7 @@ default_model = 'plasticc'
 default_settings = {
     'model_version': 2,
 
-    'predict_redshift': True,
+    'predict_redshift': False,
     'input_redshift': True,
 
     'min_wave': 1000.,

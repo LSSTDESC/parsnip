@@ -35,14 +35,10 @@ if __name__ == '__main__':
             print(f"Model '{model_path}' already exists, skipping!")
             sys.exit()
 
-    # Load the dataset(s).
-    if args['predict_redshift']:
-        require_redshift = False
-    else:
-        require_redshift = True
-
-    dataset = parsnip.load_datasets(args['dataset_paths'],
-                                    require_redshift=require_redshift)
+    dataset = parsnip.load_datasets(
+        args['dataset_paths'],
+        require_redshift=not args['predict_redshift'],
+    )
 
     # Figure out which bands we want to use for the model. If specific ones were
     # specified on the command line, use those. Otherwise, use all available bands.

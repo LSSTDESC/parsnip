@@ -363,11 +363,8 @@ def parse_plasticc(dataset, reject_invalid=True, verbose=True):
     `lcdata.Dataset`
         Parsed dataset
     """
-    print("AAAAAAH" * 1000)
-    print("Updating redshift")
-    dataset.meta['true_redshift'] = dataset.meta['redshift']
-    dataset.meta['redshift'] = dataset.meta['hostgal_specz']
-    dataset.meta['redshift'][dataset.meta['redshift'] < 0] = np.nan
+    # Set invalid speczs to nan.
+    dataset.meta['hostgal_specz'][dataset.meta['hostgal_specz'] < 0] = np.nan
 
     # Throw out light curves that don't look like supernovae
     valid_classes = [
@@ -402,7 +399,7 @@ def parse_plasticc(dataset, reject_invalid=True, verbose=True):
 
 
 def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
-                  require_redshift=False, verbose=True):
+                  require_redshift=True, verbose=True):
     """Parse a dataset from the lcdata package.
 
     We cut out observations that are not relevant for the ParSNIP model (e.g. galactic
@@ -480,7 +477,7 @@ def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
 
 
 def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
-                 require_redshift=False, verbose=True):
+                 require_redshift=True, verbose=True):
     """Load a dataset using the lcdata package.
 
     This can be any lcdata HDF5 dataset. We use `~parse_dataset` to clean things up for
@@ -516,7 +513,7 @@ def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
     return dataset
 
 
-def load_datasets(dataset_paths, reject_invalid=True, require_redshift=False,
+def load_datasets(dataset_paths, reject_invalid=True, require_redshift=True,
                   verbose=True):
     """Load a list of datasets and merge them
 
