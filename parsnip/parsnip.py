@@ -1150,7 +1150,7 @@ class ParsnipModel(nn.Module):
         else:
             return nll + kld + penalty + amp_prob + redshift_nll
 
-    def score(self, dataset, rounds=1, return_components=False):
+    def score(self, dataset, rounds=1, return_components=False, sample=True):
         """Evaluate the loss function on a given dataset.
 
         Parameters
@@ -1180,7 +1180,7 @@ class ParsnipModel(nn.Module):
         # Compute the loss
         for round in range(rounds):
             for batch_lcs in loader:
-                result = self.forward(batch_lcs)
+                result = self.forward(batch_lcs, sample=sample)
                 loss = self.loss_function(result, return_components)
 
                 if return_components:
