@@ -7,8 +7,10 @@ default_model = 'plasticc'
 default_settings = {
     'model_version': 2,
 
-    'predict_redshift': False,
     'input_redshift': True,
+
+    'predict_redshift': False,
+    'specz_error': 0.05,
 
     'min_wave': 1000.,
     'max_wave': 11000.,
@@ -92,6 +94,7 @@ def update_settings_version(settings):
     # Version 2, added redshift prediction.
     if settings['model_version'] < 2:
         settings['predict_redshift'] = False
+        settings['specz_error'] = 0.05
 
     settings['model_version'] = default_settings['model_version']
 

@@ -1130,7 +1130,9 @@ class ParsnipModel(nn.Module):
             mask = ~torch.isnan(result['redshift'])
             diff_redshifts = (result['predicted_redshift'][mask]
                               - result['redshift'][mask])
-            redshift_nll[mask] += 0.5 * diff_redshifts**2 / 0.05**2
+            redshift_nll[mask] += (
+                0.5 * diff_redshifts**2 / self.settings['specz_error']**2
+            )
         else:
             redshift_nll = torch.zeros_like(amp_prob)
 
