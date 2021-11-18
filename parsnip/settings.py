@@ -10,7 +10,7 @@ default_settings = {
     'input_redshift': True,
 
     'predict_redshift': False,
-    'specz_error': 0.05,
+    'specz_error': 0.01,
 
     'min_wave': 1000.,
     'max_wave': 11000.,
