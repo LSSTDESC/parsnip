@@ -176,8 +176,16 @@ class ParsnipModel(nn.Module):
 
         # Set up the training
         self.epoch = 0
-        self.optimizer = optim.Adam(self.parameters(),
-                                    lr=self.settings['learning_rate'])
+        optim_kwargs = {
+            'params': self.parameters(),
+            'lr': self.settings['learning_rate'],
+        }
+        if self.settings['optimizer'].lower() == 'adam':
+            self.optimizer = optim.Adam(**optim_kwargs)
+        elif self.settings['optimizer'].lower() == 'sgd':
+            self.optimizer = optim.SGD(momentum=self.settings['sgd_momentum'], **optim_kwargs)
+        else:
+            raise ValueError('Unknown optimizer "{}"'.format(self.settings['optimizer']))
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, factor=self.settings['scheduler_factor'], verbose=True
         )

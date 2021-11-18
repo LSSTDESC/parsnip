@@ -24,6 +24,8 @@ default_settings = {
     'scheduler_factor': 0.5,
     'min_learning_rate': 1e-5,
     'penalty': 1e-3,
+    'optimizer': 'Adam',  # 'Adam' or 'SGD'
+    'sgd_momentum': 0.9,
 
     'latent_size': 3,
     'input_redshift': True,
