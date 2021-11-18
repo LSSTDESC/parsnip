@@ -526,14 +526,14 @@ class ParsnipModel(nn.Module):
               encoder.
             - 'compare_data' : A `~torch.FloatTensor` containing data that is used for
               comparisons with the output of the ParSNIP decoder.
-            - 'redshifts' : A `~torch.FloatTensor` containing the redshifts of each
+            - 'redshift' : A `~torch.FloatTensor` containing the redshifts of each
               light curve.
             - 'band_indices' : A `~torch.LongTensor` containing the band indices for
               each observation that will be compared
-            - 'photozs' : A `~torch.FloatTensor` containing the photozs of each
+            - 'photoz' : A `~torch.FloatTensor` containing the photozs of each
               observation. Only available if the 'predict_redshift' model setting is
               True.
-            - 'photoz_errors' : A `~torch.FloatTensor` containing the photoz errors of
+            - 'photoz_error' : A `~torch.FloatTensor` containing the photoz errors of
               each observation. Only available if the 'predict_redshift' model setting
               is True.
         """
@@ -639,13 +639,13 @@ class ParsnipModel(nn.Module):
         data = {
             'input_data': input_data,
             'compare_data': compare_data,
-            'redshifts': redshifts,
+            'redshift': redshifts,
             'band_indices': compare_band_indices,
         }
 
         if self.settings['predict_redshift']:
-            data['photozs'] = torch.FloatTensor(photozs).to(self.device)
-            data['photoz_errors'] = torch.FloatTensor(photoz_errors).to(self.device)
+            data['photoz'] = torch.FloatTensor(photozs).to(self.device)
+            data['photoz_error'] = torch.FloatTensor(photoz_errors).to(self.device)
 
         return data
 
@@ -1013,7 +1013,7 @@ class ParsnipModel(nn.Module):
         if self.settings['predict_redshift']:
             use_redshifts = predicted_redshifts
         else:
-            use_redshifts = data['redshifts']
+            use_redshifts = data['redshift']
 
         time = data['compare_data'][:, 0]
         obs_flux = data['compare_data'][:, 1]
@@ -1038,7 +1038,7 @@ class ParsnipModel(nn.Module):
             'color': color,
             'encoding': encoding,
             'amplitude': amplitude,
-            'redshift': data['redshifts'],
+            'redshift': data['redshift'],
             'predicted_redshift': predicted_redshifts,
             'time': time,
             'obs_flux': obs_flux,
@@ -1054,8 +1054,8 @@ class ParsnipModel(nn.Module):
         }
 
         if self.settings['predict_redshift']:
-            result['photoz'] = data['photozs']
-            result['photoz_error'] = data['photoz_errors']
+            result['photoz'] = data['photoz']
+            result['photoz_error'] = data['photoz_error']
 
         if to_numpy:
             result = {k: v.detach().cpu().numpy() for k, v in result.items()}
