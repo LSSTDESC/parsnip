@@ -1686,7 +1686,7 @@ class ParsnipModel(nn.Module):
 
         meta = light_curve.meta
         if self.settings['predict_redshift']:
-            model['z'] = meta['predicted_redshift']
+            model['z'] = result['predicted_redshift'][0]
         else:
             model['z'] = meta['redshift']
 
