@@ -520,16 +520,27 @@ class ParsnipModel(nn.Module):
 
         Returns
         -------
-        input_data : `~torch.FloatTensor`
-            Data that is used as input to the ParSNIP encoder
-        compare_data : `~torch.FloatTensor`
-            Data that is used for comparisons with the output of the ParSNIP decoder
-        redshifts : `~torch.FloatTensor`
-            Redshifts of each light curve
-        compare_band_indices : `~torch.LongTensor`
-            Band indices for each observation that will be compared
+        data : dict
+            A dictionary with the following keys:
+            - 'input_data' : A `~torch.FloatTensor` that is used as input to the ParSNIP
+              encoder.
+            - 'compare_data' : A `~torch.FloatTensor` containing data that is used for
+              comparisons with the output of the ParSNIP decoder.
+            - 'redshift' : A `~torch.FloatTensor` containing the redshifts of each
+              light curve.
+            - 'band_indices' : A `~torch.LongTensor` containing the band indices for
+              each observation that will be compared
+            - 'photoz' : A `~torch.FloatTensor` containing the photozs of each
+              observation. Only available if the 'predict_redshift' model setting is
+              True.
+            - 'photoz_error' : A `~torch.FloatTensor` containing the photoz errors of
+              each observation. Only available if the 'predict_redshift' model setting
+              is True.
         """
         redshifts = []
+        if self.settings['predict_redshift']:
+            photozs = []
+            photoz_errors = []
 
         compare_data = []
         compare_band_indices = []
@@ -550,7 +561,14 @@ class ParsnipModel(nn.Module):
                 lc_data, lc_meta = lc
 
             # Extract the redshift.
-            redshifts.append(lc_meta['redshift'])
+            if self.settings['predict_redshift']:
+                # Note: this uses the keys for PLAsTiCC and should be adapted to handle
+                # more general surveys.
+                redshifts.append(lc_meta['hostgal_specz'])
+                photozs.append(lc_meta['hostgal_photoz'])
+                photoz_errors.append(lc_meta['hostgal_photoz_err'])
+            else:
+                redshifts.append(lc_meta['redshift'])
 
             # Mask out observations that are outside of our window.
             mask = (lc_data['time_index'] >= 0) & (lc_data['time_index'] <
@@ -587,44 +605,58 @@ class ParsnipModel(nn.Module):
 
         # Gather the input data.
         redshifts = np.array(redshifts)
+        if self.settings['predict_redshift']:
+            photozs = np.array(photozs)
+            photoz_errors = np.array(photoz_errors)
 
-        # Stack the input data
+        # Add extra features to the input.
         if self.settings['input_redshift']:
-            input_data = np.concatenate([
-                redshifts[:, None, None].repeat(self.settings['time_window'], axis=2),
-                grid_flux,
-                grid_weights,
-            ], axis=1)
-        else:
-            input_data = np.concatenate([
-                grid_flux,
-                grid_weights,
-            ], axis=1)
+            if self.settings['predict_redshift']:
+                extra_input_data = [photozs, photoz_errors]
+            else:
+                extra_input_data = [redshifts]
+
+        # Stack everything together.
+        input_data = np.concatenate(
+            [i[:, None, None].repeat(self.settings['time_window'], axis=2) for i in
+             extra_input_data]
+            + [grid_flux, grid_weights],
+            axis=1
+        )
 
         # Convert to torch tensors
-        input_data = torch.FloatTensor(input_data)
-        redshifts = torch.FloatTensor(redshifts)
+        input_data = torch.FloatTensor(input_data).to(self.device)
+        redshifts = torch.FloatTensor(redshifts).to(self.device)
 
         # Pad all of the compare data to have the same shape.
         compare_data = nn.utils.rnn.pad_sequence(compare_data, batch_first=True)
         compare_data = compare_data.permute(0, 2, 1)
         compare_band_indices = nn.utils.rnn.pad_sequence(compare_band_indices,
                                                          batch_first=True)
-
-        # Send the arrays to the model's device.
-        input_data = input_data.to(self.device)
         compare_data = compare_data.to(self.device)
-        redshifts = redshifts.to(self.device)
         compare_band_indices = compare_band_indices.to(self.device)
 
-        return input_data, compare_data, redshifts, compare_band_indices
+        data = {
+            'input_data': input_data,
+            'compare_data': compare_data,
+            'redshift': redshifts,
+            'band_indices': compare_band_indices,
+        }
+
+        if self.settings['predict_redshift']:
+            data['photoz'] = torch.FloatTensor(photozs).to(self.device)
+            data['photoz_error'] = torch.FloatTensor(photoz_errors).to(self.device)
+
+        return data
 
     def _build_model(self):
         """Build the model"""
+        input_size = len(self.settings['bands']) * 2
         if self.settings['input_redshift']:
-            input_size = len(self.settings['bands']) * 2 + 1
-        else:
-            input_size = len(self.settings['bands']) * 2
+            if self.settings['predict_redshift']:
+                input_size += 2
+            else:
+                input_size += 1
 
         if self.settings['encode_block'] == 'conv1d':
             encode_block = Conv1dBlock
@@ -696,10 +728,16 @@ class ParsnipModel(nn.Module):
         self.encode_latent_layers = nn.Sequential(*encode_latent_layers)
 
         # Finally, use a last FC layer to get mu and logvar
-        self.encode_mu_layer = nn.Linear(latent_last_size,
-                                         self.settings['latent_size'] + 1)
-        self.encode_logvar_layer = nn.Linear(latent_last_size,
-                                             self.settings['latent_size'] + 2)
+        mu_size = self.settings['latent_size'] + 1
+        logvar_size = self.settings['latent_size'] + 2
+
+        if self.settings['predict_redshift']:
+            # Predict the redshift
+            mu_size += 1
+            logvar_size += 1
+
+        self.encode_mu_layer = nn.Linear(latent_last_size, mu_size)
+        self.encode_logvar_layer = nn.Linear(latent_last_size, logvar_size)
 
         # MLP decoder. We start with an input that is the intrinsic latent space + one
         # dimension for time, and output a spectrum of size
@@ -917,6 +955,12 @@ class ParsnipModel(nn.Module):
         time_sigma = self.settings['time_sigma']
         color_sigma = self.settings['color_sigma']
 
+        if self.settings['predict_redshift']:
+            redshift = torch.exp(sample_encoding[:, -1] - 1)
+            sample_encoding = sample_encoding[:, :-1]
+        else:
+            redshift = torch.zeros_like(sample_encoding[:, 0])
+
         # Rescale variables
         ref_times = sample_encoding[:, 0] * time_sigma
         color = sample_encoding[:, 1] * color_sigma
@@ -928,8 +972,9 @@ class ParsnipModel(nn.Module):
         # the training at high learning rates.
         ref_times = torch.clamp(ref_times, -10. * time_sigma, 10. * time_sigma)
         color = torch.clamp(color, -10. * color_sigma, 10. * color_sigma)
+        redshift = torch.clamp(redshift, 0., self.settings['max_redshift'])
 
-        return ref_times, color, encoding
+        return redshift, ref_times, color, encoding
 
     def forward(self, light_curves, sample=True, to_numpy=False):
         """Run a set of light curves through the full ParSNIP model
@@ -955,27 +1000,35 @@ class ParsnipModel(nn.Module):
             arrays. Otherwise, they will be PyTorch tensors on the model's device.
         """
         # Extract the data that we need and move it to the right device.
-        input_data, compare_data, redshifts, band_indices = self._get_data(light_curves)
+        data = self._get_data(light_curves)
 
         # Encode the light curves.
-        encoding_mu, encoding_logvar = self.encode(input_data)
+        encoding_mu, encoding_logvar = self.encode(data['input_data'])
 
         # Sample from the latent space.
-        ref_times, color, encoding = self._sample(encoding_mu, encoding_logvar,
-                                                  sample=sample)
+        predicted_redshifts, ref_times, color, encoding = self._sample(
+            encoding_mu, encoding_logvar, sample=sample
+        )
+
+        if self.settings['predict_redshift']:
+            use_redshifts = predicted_redshifts
+        else:
+            use_redshifts = data['redshift']
+
+        time = data['compare_data'][:, 0]
+        obs_flux = data['compare_data'][:, 1]
+        obs_fluxerr = data['compare_data'][:, 2]
+        obs_weight = data['compare_data'][:, 3]
 
         # Decode the light curves
         model_spectra, model_flux = self.decode(
-            encoding, ref_times, color, compare_data[:, 0], redshifts, band_indices
+            encoding, ref_times, color, time, use_redshifts, data['band_indices']
         )
-
-        flux = compare_data[:, 1]
-        weight = compare_data[:, 3]
 
         # Analytically evaluate the conditional distribution for the amplitude and
         # sample from it.
-        amplitude_mu, amplitude_logvar = self._compute_amplitude(weight, model_flux,
-                                                                 flux)
+        amplitude_mu, amplitude_logvar = self._compute_amplitude(obs_weight, model_flux,
+                                                                 obs_flux)
         amplitude = self._reparameterize(amplitude_mu, amplitude_logvar, sample=sample)
         model_flux = model_flux * amplitude[:, None]
         model_spectra = model_spectra * amplitude[:, None, None]
@@ -985,11 +1038,13 @@ class ParsnipModel(nn.Module):
             'color': color,
             'encoding': encoding,
             'amplitude': amplitude,
-            'time': compare_data[:, 0],
-            'obs_flux': compare_data[:, 1],
-            'obs_fluxerr': compare_data[:, 2],
-            'obs_weight': compare_data[:, 3],
-            'band_indices': band_indices,
+            'redshift': data['redshift'],
+            'predicted_redshift': predicted_redshifts,
+            'time': time,
+            'obs_flux': obs_flux,
+            'obs_fluxerr': obs_fluxerr,
+            'obs_weight': obs_weight,
+            'band_indices': data['band_indices'],
             'model_flux': model_flux,
             'model_spectra': model_spectra,
             'encoding_mu': encoding_mu,
@@ -997,6 +1052,10 @@ class ParsnipModel(nn.Module):
             'amplitude_mu': amplitude_mu,
             'amplitude_logvar': amplitude_logvar,
         }
+
+        if self.settings['predict_redshift']:
+            result['photoz'] = data['photoz']
+            result['photoz_error'] = data['photoz_error']
 
         if to_numpy:
             result = {k: v.detach().cpu().numpy() for k, v in result.items()}
@@ -1061,6 +1120,22 @@ class ParsnipModel(nn.Module):
         amp_prob = -0.5 * ((result['amplitude'] - result['amplitude_mu'])**2
                            / result['amplitude_logvar'].exp())
 
+        # Redshift error
+        if self.settings['predict_redshift']:
+            # Prior from photoz estimate
+            photoz_diff = result['predicted_redshift'] - result['photoz']
+            redshift_nll = 0.5 * photoz_diff**2 / result['photoz_error']**2
+
+            # Prior from true redshift
+            mask = ~torch.isnan(result['redshift'])
+            diff_redshifts = (result['predicted_redshift'][mask]
+                              - result['redshift'][mask])
+            redshift_nll[mask] += (
+                0.5 * diff_redshifts**2 / self.settings['specz_error']**2
+            )
+        else:
+            redshift_nll = torch.zeros_like(amp_prob)
+
         if return_individual:
             nll = torch.sum(nll, axis=1)
             kld = torch.sum(kld, axis=1)
@@ -1070,13 +1145,14 @@ class ParsnipModel(nn.Module):
             kld = torch.sum(kld)
             penalty = torch.sum(penalty)
             amp_prob = torch.sum(amp_prob)
+            redshift_nll = torch.sum(redshift_nll)
 
         if return_components:
-            return torch.stack([nll, kld, penalty, amp_prob])
+            return torch.stack([nll, kld, penalty, amp_prob, redshift_nll])
         else:
-            return nll + kld + penalty + amp_prob
+            return nll + kld + penalty + amp_prob + redshift_nll
 
-    def score(self, dataset, rounds=1, return_components=False):
+    def score(self, dataset, rounds=1, return_components=False, sample=True):
         """Evaluate the loss function on a given dataset.
 
         Parameters
@@ -1106,7 +1182,7 @@ class ParsnipModel(nn.Module):
         # Compute the loss
         for round in range(rounds):
             for batch_lcs in loader:
-                result = self.forward(batch_lcs)
+                result = self.forward(batch_lcs, sample=sample)
                 loss = self.loss_function(result, return_components)
 
                 if return_components:
@@ -1303,6 +1379,17 @@ class ParsnipModel(nn.Module):
                 batch_predictions[f's{idx+1}'] = encoding_mu[:, 2 + idx]
                 batch_predictions[f's{idx+1}_error'] = encoding_err[:, 2 + idx]
 
+            if self.settings['predict_redshift']:
+                pred_redshift = np.clip(
+                    np.exp(encoding_mu[:, -1] - 1),
+                    0, self.settings['max_redshift']
+                )
+                pred_redshift_pos = np.exp(encoding_mu[:, -1] + encoding_err[:, -1] - 1)
+                pred_redshift_neg = np.exp(encoding_mu[:, -1] - encoding_err[:, -1] - 1)
+                pred_redshift_error = (pred_redshift_pos - pred_redshift_neg) / 2.
+                batch_predictions['predicted_redshift'] = pred_redshift
+                batch_predictions['predicted_redshift_error'] = pred_redshift_error
+
             # Calculate other useful features.
             time = result['time']
             obs_flux = result['obs_flux']
@@ -1360,7 +1447,10 @@ class ParsnipModel(nn.Module):
         # Figure out which light curves we can calculate the luminosity for.
         amplitudes = predictions['amplitude'].copy()
         amplitude_mask = amplitudes > 0.
-        redshifts = predictions['redshift'].copy()
+        if self.settings['predict_redshift']:
+            redshifts = predictions['predicted_redshift'].copy()
+        else:
+            redshifts = predictions['redshift'].copy()
         redshift_mask = redshifts > 0.
         amplitude_error_mask = predictions['amplitude_error'] < 0.5 * amplitudes
         luminosity_mask = amplitude_mask & redshift_mask & amplitude_error_mask
@@ -1453,8 +1543,11 @@ class ParsnipModel(nn.Module):
         result = self.forward(light_curves, sample)
 
         # Do the predictions
-        redshifts = torch.FloatTensor([i.meta['redshift'] for i in light_curves],
-                                      device=self.device)
+        if self.settings['predict_redshift']:
+            redshifts = result['predicted_redshift']
+        else:
+            redshifts = result['redshift']
+
         model_spectra, model_flux = self.decode(
             result['encoding'],
             result['ref_times'],
@@ -1592,7 +1685,11 @@ class ParsnipModel(nn.Module):
         model = sncosmo.Model(source=ParsnipSncosmoSource(self))
 
         meta = light_curve.meta
-        model['z'] = meta['redshift']
+        if self.settings['predict_redshift']:
+            model['z'] = result['predicted_redshift'][0]
+        else:
+            model['z'] = meta['redshift']
+
         model['t0'] = grid_to_time(result['ref_times'][0],
                                    meta['parsnip_reference_time'])
         model['color'] = result['color'][0]

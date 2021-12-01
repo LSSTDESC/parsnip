@@ -45,7 +45,11 @@ if __name__ == '__main__':
 
     # Load the metadata for the dataset. We parse the dataset in chunks since we can't
     # necessarily fit large datasets all in memory.
-    dataset = parsnip.load_dataset(args['dataset_path'], in_memory=False)
+    dataset = parsnip.load_dataset(
+        args['dataset_path'],
+        require_redshift=not model.settings['predict_redshift'],
+        in_memory=False
+    )
 
     # Parse the dataset in chunks. For large datasets, we can't fit them all in memory
     # at the same time.

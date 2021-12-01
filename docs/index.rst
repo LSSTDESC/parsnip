@@ -16,6 +16,7 @@ estimation, and identifying novel transients.
    usage
    sncosmo
    boone2021
+   photoz
    reference
 
 Source code: https://github.com/kboone/parsnip

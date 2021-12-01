@@ -137,10 +137,11 @@ Settings
 .. autosummary::
    :toctree: api
 
-   update_derived_settings
    parse_settings
    parse_int_list
    build_default_argparse
+   update_derived_settings
+   update_settings_version
 
 
 Light curve utilities

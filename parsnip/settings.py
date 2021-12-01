@@ -5,7 +5,12 @@ from .instruments import calculate_band_mw_extinctions, should_correct_backgroun
 default_model = 'plasticc'
 
 default_settings = {
-    'model_version': 1,
+    'model_version': 2,
+
+    'input_redshift': True,
+
+    'predict_redshift': False,
+    'specz_error': 0.01,
 
     'min_wave': 1000.,
     'max_wave': 11000.,
@@ -26,7 +31,6 @@ default_settings = {
     'penalty': 1e-3,
 
     'latent_size': 3,
-    'input_redshift': True,
     'encode_block': 'residual',
     'encode_conv_architecture': [40, 80, 120, 160, 200, 200, 200],
     'encode_conv_dilations': [1, 2, 4, 8, 16, 32, 64],
@@ -74,6 +78,29 @@ def update_derived_settings(settings):
     return settings
 
 
+def update_settings_version(settings):
+    """Update settings to a new version
+
+    Parameters
+    ----------
+    settings : dict
+        Old settings
+
+    Returns
+    -------
+    dict
+        Updates settings
+    """
+    # Version 2, added redshift prediction.
+    if settings['model_version'] < 2:
+        settings['predict_redshift'] = False
+        settings['specz_error'] = 0.05
+
+    settings['model_version'] = default_settings['model_version']
+
+    return settings
+
+
 def parse_settings(bands, settings={}, ignore_unknown_settings=False):
     """Parse the settings for a ParSNIP model
 
@@ -117,6 +144,10 @@ def parse_settings(bands, settings={}, ignore_unknown_settings=False):
 
     if not prebuilt_model:
         use_settings = update_derived_settings(use_settings)
+
+    if use_settings['model_version'] != default_settings['model_version']:
+        # Update the settings to the latest version
+        use_settings = update_settings_version(use_settings)
 
     return use_settings
 
