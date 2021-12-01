@@ -75,6 +75,8 @@ Currently, these are:
 
 * `plasticc` trained on the PLAsTiCC dataset.
 * `ps1` trained on the PS1 dataset from Villar et al. 2020.
+* `plasticc_photoz` trained on the PLAsTiCC dataset. Uses the photometric redshifts
+  instead of the true redshifts.
 
 To load one of these built-in models::
 
