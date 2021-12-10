@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 
 from .light_curve import preprocess_light_curve, grid_to_time, time_to_grid, \
     SIDEREAL_SCALE
-from .utils import frac_to_mag, parse_device
+from .utils import frac_to_mag, parse_device, replace_nan_grads
 from .settings import parse_settings, default_model
 from .sncosmo import ParsnipSncosmoSource
 
@@ -1234,6 +1234,7 @@ class ParsnipModel(nn.Module):
                         loss = self.loss_function(result)
 
                         loss.backward()
+                        replace_nan_grads(self.parameters())
                         train_loss += loss.item()
                         self.optimizer.step()
 
