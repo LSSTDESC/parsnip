@@ -68,3 +68,20 @@ def parse_device(device):
         use_device = 'cpu'
 
     return use_device
+
+
+def replace_nan_grads(parameters, value=0.0):
+    """Replace NaN gradients
+
+    Parameters
+    ----------
+    parameters : Iterator[torch.Tensor]
+        Model parameters, usually you can get them by `model.parameters()`
+    value : float, optional
+        Value to replace NaNs with
+    """
+    for p in parameters:
+        if p.grad is None:
+            continue
+        grads = p.grad.data
+        grads[torch.isnan(grads)] = value
