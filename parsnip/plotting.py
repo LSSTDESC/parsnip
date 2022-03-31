@@ -150,7 +150,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
 
             try:
                 flux = flux_scale * sncosmo_model.bandflux(
-                    band_name, model_times, zp=25., zpsys='ab'
+                    band_name, model_times, zp=model.settings['zeropoint'], zpsys='ab'
                 )
             except ValueError:
                 # Outside of wavelength range
@@ -175,7 +175,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
     if normalize_flux:
         ax.set_ylabel('Normalized Flux')
     else:
-        ax.set_ylabel('Flux ($ZP_{AB}$=25)')
+        ax.set_ylabel(f'Flux ($ZP_{{AB}}$={master.settings["zeropoint"]})')
 
 
 def normalize_spectrum_flux(wave, flux, min_wave=5500., max_wave=6500.):
