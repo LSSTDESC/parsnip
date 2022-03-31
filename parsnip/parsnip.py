@@ -1443,7 +1443,7 @@ class ParsnipModel(nn.Module):
         meta.remove_columns(common_columns)
         predictions = astropy.table.hstack([meta, predictions], 'exact')
 
-        # Estimate the absolute luminosity (assuming a zeropoint of 25).
+        # Estimate the absolute luminosity.
         # Figure out which light curves we can calculate the luminosity for.
         amplitudes = predictions['amplitude'].copy()
         amplitude_mask = amplitudes > 0.
@@ -1463,7 +1463,7 @@ class ParsnipModel(nn.Module):
 
         luminosity = (
             -2.5*np.log10(amplitudes)
-            + 25.
+            + self.settings['zeropoint']
             - Planck18.distmod(redshifts).value
         )
         luminosity[~luminosity_mask] = np.nan
@@ -1699,7 +1699,7 @@ class ParsnipModel(nn.Module):
         # apply an offset of 45 mag when calculating the amplitude for sncosmo.
         model['amplitude'] = (
             light_curve.meta['parsnip_scale'] * result['amplitude'][0]
-            * 10**(-0.4 * 45)
+            * 10**(-0.4 * (20 + self.settings['zeropoint']))
         )
 
         for i in range(self.settings['latent_size']):
