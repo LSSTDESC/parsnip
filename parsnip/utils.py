@@ -57,11 +57,18 @@ def parse_device(device):
         Device to use
     """
     # Figure out which device to run on.
+    try:
+        backend = getattr(torch.backends, device)
+        is_available = getattr(backend, 'is_available')
+    except AttributeError:
+        device_available = False
+    else:
+        device_available = is_available()
+
     if device == 'cpu':
         # Requested CPU.
         use_device = 'cpu'
-    elif torch.cuda.is_available():
-        # Requested GPU and it is available.
+    elif device_available:
         use_device = device
     else:
         print(f"WARNING: Device '{device}' not available, using 'cpu' instead.")
