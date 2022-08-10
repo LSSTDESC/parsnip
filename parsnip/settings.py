@@ -23,6 +23,7 @@ default_settings = {
     'color_sigma': 0.3,
     'magsys': 'ab',
     'error_floor': 0.01,
+    'zeropoint': 25.0,
 
     'batch_size': 128,
     'learning_rate': 1e-3,
