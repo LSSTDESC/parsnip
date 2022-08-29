@@ -68,6 +68,8 @@ def parse_device(device):
     if device == 'cpu':
         # Requested CPU.
         use_device = 'cpu'
+    elif device == 'cuda' and torch.cuda.is_available():
+        use_device = 'cuda'
     elif device_available:
         use_device = device
     else:
