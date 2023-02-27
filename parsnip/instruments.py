@@ -252,6 +252,9 @@ def parse_ztf(dataset, reject_invalid=True, label_map=None, verbose=True):
 
     # Clean up labels
     types = [str(i).replace(' ', '').replace('?', '') for i in dataset.meta['type']]
+    print(label_map)
+    print("lalalala")
+    quit()
     if label_map is None:
         label_map = {
             'AGN': 'Galaxy',
@@ -530,7 +533,7 @@ def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
     return dataset
 
 
-def load_datasets(dataset_paths, reject_invalid=True, require_redshift=True,
+def load_datasets(dataset_paths, kind=None, reject_invalid=True, require_redshift=True,
                   label_map=None,verbose=True):
     """Load a list of datasets and merge them
 
@@ -550,7 +553,8 @@ def load_datasets(dataset_paths, reject_invalid=True, require_redshift=True,
     datasets = []
     for dataset_name in dataset_paths:
         datasets.append(load_dataset(
-            dataset_name,
+            path=dataset_name,
+            kind=kind,
             reject_invalid=reject_invalid,
             require_redshift=require_redshift,
             label_map=label_map,
