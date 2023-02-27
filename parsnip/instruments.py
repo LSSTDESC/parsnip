@@ -222,7 +222,7 @@ def parse_ps1(dataset, reject_invalid=True, label_map=None, verbose=True):
     return dataset
 
 
-def parse_ztf(dataset, reject_invalid=True, label_map=None, verbose=True):
+def parse_ztf(dataset, reject_invalid=True, label_map=None, valid_classes=None, verbose=True):
     """Parse a ZTF dataset
 
     Parameters
@@ -252,9 +252,7 @@ def parse_ztf(dataset, reject_invalid=True, label_map=None, verbose=True):
 
     # Clean up labels
     types = [str(i).replace(' ', '').replace('?', '') for i in dataset.meta['type']]
-    print(label_map)
-    print("lalalala")
-    quit()
+
     if label_map is None:
         label_map = {
             'AGN': 'Galaxy',
@@ -336,18 +334,19 @@ def parse_ztf(dataset, reject_invalid=True, label_map=None, verbose=True):
     dataset.meta['type'] = [label_map[i] for i in types]
 
     # Drop light curves that aren't supernova-like
-    valid_classes = [
-        'SNIa',
-        'SNII',
-        'Unknown',
-        # 'Galaxy',
-        'SNIbc',
-        'SLSN',
-        # 'Star',
-        'TDE',
-        # 'Bad',
-        'Peculiar',
-    ]
+    if valid_classes is None:
+        valid_classes = [
+            'SNIa',
+            'SNII',
+            'Unknown',
+            # 'Galaxy',
+            'SNIbc',
+            'SLSN',
+            # 'Star',
+            'TDE',
+            # 'Bad',
+            'Peculiar',
+        ]
     if reject_invalid:
         mask = np.isin(dataset.meta['type'], valid_classes)
         if verbose:
@@ -405,8 +404,7 @@ def parse_plasticc(dataset, reject_invalid=True, verbose=True):
     return dataset
 
 
-def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
-                  require_redshift=True, label_map=None, verbose=True):
+def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True, require_redshift=True, label_map=None, valid_classes=None,verbose=True):
     """Parse a dataset from the lcdata package.
 
     We cut out observations that are not relevant for the ParSNIP model (e.g. galactic
@@ -462,7 +460,7 @@ def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
     elif kind == 'plasticc':
         dataset = parse_plasticc(dataset=dataset, reject_invalid=reject_invalid, verbose=verbose)
     elif kind == 'ztf':
-        dataset = parse_ztf(dataset=dataset, reject_invalid=reject_invalid, label_map=label_map, verbose=verbose)
+        dataset = parse_ztf(dataset=dataset, reject_invalid=reject_invalid, label_map=label_map, valid_classes=valid_classes,verbose=verbose)
     elif kind == 'default':
         # Don't do anything by default
         pass
@@ -487,7 +485,7 @@ def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
 
 
 def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
-                 require_redshift=True, label_map=None, verbose=True):
+                 require_redshift=True, label_map=None, valid_classes=None, verbose=True):
     """Load a dataset using the lcdata package.
 
     This can be any lcdata HDF5 dataset. We use `~parse_dataset` to clean things up for
@@ -527,14 +525,14 @@ def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
         reject_invalid=reject_invalid,
         require_redshift=require_redshift,
         label_map=label_map,
+        valid_classes=valid_classes,
         verbose=verbose
     )
 
     return dataset
 
 
-def load_datasets(dataset_paths, kind=None, reject_invalid=True, require_redshift=True,
-                  label_map=None,verbose=True):
+def load_datasets(dataset_paths, kind=None, reject_invalid=True, require_redshift=True, label_map=None,valid_classes=None,verbose=True):
     """Load a list of datasets and merge them
 
     Parameters
@@ -558,6 +556,7 @@ def load_datasets(dataset_paths, kind=None, reject_invalid=True, require_redshif
             reject_invalid=reject_invalid,
             require_redshift=require_redshift,
             label_map=label_map,
+            valid_classes=valid_classes,
             verbose=verbose
         ))
 
