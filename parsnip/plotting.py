@@ -1,13 +1,14 @@
+import itertools
+
+import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec
 from sklearn.metrics import confusion_matrix
-import itertools
-import numpy as np
 
-from .light_curve import preprocess_light_curve
 from .classifier import extract_top_classifications
-from .instruments import get_band_effective_wavelength, get_band_plot_color, \
-    get_band_plot_marker
+from .instruments import (get_band_effective_wavelength, get_band_plot_color,
+                          get_band_plot_marker)
+from .light_curve import preprocess_light_curve
 
 
 def _get_reference_time(light_curve):
@@ -502,7 +503,8 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
     verbose : bool, optional
         Whether to print additional statistics, by default True
     """
-    true_types = np.char.decode(predictions['type'])
+    # true_types = np.char.decode(predictions['type'])
+    true_types = predictions["type"]
     predicted_types = extract_top_classifications(classifications)
 
     if len(classifications.columns) == 3 and classifications.colnames[2] == 'Other':
@@ -513,15 +515,15 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
 
     type_names = classifications.colnames[1:]
 
-    plt.figure(figsize=figsize, constrained_layout=True)
+    fig, ax = plt.subplots(figsize=figsize, constrained_layout=True)
     cm = confusion_matrix(true_types, predicted_types, labels=type_names,
                           normalize='true')
 
-    im = plt.imshow(cm, interpolation='nearest',
+    im = ax.imshow(cm, interpolation='nearest',
                     cmap=plt.cm.Blues, vmin=0, vmax=1)
     tick_marks = np.arange(len(type_names))
-    plt.xticks(tick_marks, type_names, rotation=60, ha='right')
-    plt.yticks(tick_marks, type_names)
+    ax.set_xticks(tick_marks, type_names, rotation=60, ha='right')
+    ax.set_yticks(tick_marks, type_names)
 
     fmt = '.2f'
     thresh = cm.max() / 2.
@@ -530,15 +532,15 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
                  horizontalalignment="center",
                  color="white" if cm[i, j] > thresh else "black")
 
-    plt.ylabel('True Type')
-    plt.xlabel('Predicted Type')
+    ax.set_ylabel('True Type')
+    ax.set_xlabel('Predicted Type')
     if title is not None:
-        plt.title(title)
+        ax.set_title(title)
 
     # Make a colorbar that is lined up with the plot
     from mpl_toolkits.axes_grid1 import make_axes_locatable
-    ax = plt.gca()
-    divider = make_axes_locatable(ax)
+    ax1 = plt.gca()
+    divider = make_axes_locatable(ax1)
     cax = divider.append_axes("right", size="4%", pad=0.25)
     plt.colorbar(im, cax=cax, label='Fraction of objects')
 
@@ -547,6 +549,8 @@ def plot_confusion_matrix(predictions, classifications, figsize=(5, 4), title=No
         print("Macro averaged completeness (Villar et al. 2020): "
               f"{np.diag(cm).mean():.4f}")
         print(f"Fraction correct: {np.mean(true_types == predicted_types):.4f}")
+
+    return ax
 
 
 def plot_representation(predictions, plot_labels, mask=None, idx1=1, idx2=2, idx3=None,
