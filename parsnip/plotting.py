@@ -175,7 +175,7 @@ def plot_light_curve(light_curve, model=None, count=100, show_uncertainty_bands=
     if normalize_flux:
         ax.set_ylabel('Normalized Flux')
     else:
-        ax.set_ylabel(f'Flux ($ZP_{{AB}}$={master.settings["zeropoint"]})')
+        ax.set_ylabel(f'Flux ($ZP_{{AB}}$={model.settings["zeropoint"]})')
 
 
 def normalize_spectrum_flux(wave, flux, min_wave=5500., max_wave=6500.):
