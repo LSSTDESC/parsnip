@@ -1,6 +1,7 @@
-from functools import reduce, lru_cache
-import extinction
 import hashlib
+from functools import lru_cache, reduce
+
+import extinction
 import lcdata
 import numpy as np
 import sncosmo
@@ -173,7 +174,7 @@ def get_band_plot_marker(band):
         return 'o'
 
 
-def parse_ps1(dataset, reject_invalid=True, verbose=True):
+def parse_ps1(dataset, reject_invalid=True, label_map=None, verbose=True):
     """Parse a PanSTARRS-1 dataset
 
     Parameters
@@ -193,34 +194,35 @@ def parse_ps1(dataset, reject_invalid=True, verbose=True):
 
     # Labels to use for classification. Note that all of the non-supernova-like light
     # curves get rejected by the previous cut from Villar et al. 2020.
-    label_map = {
-        'AGN': 'AGN',
-        'Bad': 'Bad',
-        'Bad (rise)': 'Bad',
-        'FELT': 'FELT',
-        'FELT (Bronze)': 'FELT',
-        'Lensed SNIa': 'Lensed SNIa',
-        'QSO': 'QSO',
-        'SLSN': 'SLSN',
-        'SNII': 'SNII',
-        'SNIIb?': 'SNII',
-        'SNIIn': 'SNIIn',
-        'SNIa': 'SNIa',
-        'SNIax': 'SNIax',
-        'SNIbc (Ib)': 'SNIbc',
-        'SNIbc (Ic)': 'SNIbc',
-        'SNIbc (Ic-BL)': 'SNIbc',
-        'SNIbn': 'SNIbc',
-        'TDE': 'TDE',
-        'Unknown': 'Unknown',
-        'VAR': 'VAR'
-    }
+    if label_map is None:
+        label_map = {
+            'AGN': 'AGN',
+            'Bad': 'Bad',
+            'Bad (rise)': 'Bad',
+            'FELT': 'FELT',
+            'FELT (Bronze)': 'FELT',
+            'Lensed SNIa': 'Lensed SNIa',
+            'QSO': 'QSO',
+            'SLSN': 'SLSN',
+            'SNII': 'SNII',
+            'SNIIb?': 'SNII',
+            'SNIIn': 'SNIIn',
+            'SNIa': 'SNIa',
+            'SNIax': 'SNIax',
+            'SNIbc (Ib)': 'SNIbc',
+            'SNIbc (Ic)': 'SNIbc',
+            'SNIbc (Ic-BL)': 'SNIbc',
+            'SNIbn': 'SNIbc',
+            'TDE': 'TDE',
+            'Unknown': 'Unknown',
+            'VAR': 'VAR'
+        }
     dataset.meta['type'] = [label_map[i] for i in dataset.meta['type']]
 
     return dataset
 
 
-def parse_ztf(dataset, reject_invalid=True, verbose=True):
+def parse_ztf(dataset, reject_invalid=True, label_map=None, valid_classes=None, verbose=True):
     """Parse a ZTF dataset
 
     Parameters
@@ -250,98 +252,101 @@ def parse_ztf(dataset, reject_invalid=True, verbose=True):
 
     # Clean up labels
     types = [str(i).replace(' ', '').replace('?', '') for i in dataset.meta['type']]
-    label_map = {
-        'AGN': 'Galaxy',
-        'Bogus': 'Bad',
-        'CLAGN': 'Galaxy',
-        'CV': 'Star',
-        'CVCandidate': 'Star',
-        'Duplicate': 'Bad',
-        'Galaxy': 'Galaxy',
-        'Gap': 'Peculiar',
-        'GapI': 'Peculiar',
-        'GapI-Ca-rich': 'Peculiar',
-        'IIP': 'SNII',
-        'ILRT': 'Peculiar',
-        'LBV': 'Star',
-        'LINER': 'Galaxy',
-        'LRN': 'Star',
-        'NLS1': 'Galaxy',
-        'None': 'Unknown',
-        'Nova': 'Star',
-        'Q': 'Galaxy',
-        'QSO': 'Galaxy',
-        'SLSN-I': 'SLSN',
-        'SLSN-I.5': 'SLSN',
-        'SLSN-II': 'SLSN',
-        'SLSN-R': 'SLSN',
-        'SN': 'Unknown',
-        'SNII': 'SNII',
-        'SNII-pec': 'SNII',
-        'SNIIL': 'SNII',
-        'SNIIP': 'SNII',
-        'SNIIb': 'SNII',
-        'SNIIn': 'SNII',
-        'SNIa': 'SNIa',
-        'SNIa-91T': 'SNIa',
-        'SNIa-91T-like': 'SNIa',
-        'SNIa-91bg': 'SNIa',
-        'SNIa-99aa': 'SNIa',
-        'SNIa-CSM': 'SNIa',
-        'SNIa-norm': 'SNIa',
-        'SNIa-pec': 'SNIa',
-        'SNIa00cx-like': 'SNIa',
-        'SNIa02cx-like': 'SNIa',
-        'SNIa02ic-like': 'SNIa',
-        'SNIa91T': 'SNIa',
-        'SNIa91T-like': 'SNIa',
-        'SNIa91bg-like': 'SNIa',
-        'SNIapec': 'SNIa',
-        'SNIax': 'SNIa',
-        'SNIb': 'SNIbc',
-        'SNIb/c': 'SNIbc',
-        'SNIbn': 'SNIbc',
-        'SNIbpec': 'SNIbc',
-        'SNIc': 'SNIbc',
-        'SNIc-BL': 'SNIbc',
-        'SNIc-broad': 'SNIbc',
-        'Star': 'Star',
-        'TDE': 'TDE',
-        'Var': 'Star',
-        'asteroid': 'Asteroid',
-        'blazar': 'Galaxy',
-        'bogus': 'Bad',
-        'duplicate': 'Bad',
-        'galaxy': 'Galaxy',
-        'nan': 'Unknown',
-        'nova': 'Star',
-        'old': 'Bad',
-        'rock': 'Asteroid',
-        'star': 'Star',
-        'stellar': 'Star',
-        'unclassified': 'Unknown',
-        'unk': 'Unknown',
-        'unknown': 'Unknown',
-        'Unknown': 'Unknown',
-        'varstar': 'Star',
-    }
+
+    if label_map is None:
+        label_map = {
+            'AGN': 'Galaxy',
+            'Bogus': 'Bad',
+            'CLAGN': 'Galaxy',
+            'CV': 'Star',
+            'CVCandidate': 'Star',
+            'Duplicate': 'Bad',
+            'Galaxy': 'Galaxy',
+            'Gap': 'Peculiar',
+            'GapI': 'Peculiar',
+            'GapI-Ca-rich': 'Peculiar',
+            'IIP': 'SNII',
+            'ILRT': 'Peculiar',
+            'LBV': 'Star',
+            'LINER': 'Galaxy',
+            'LRN': 'Star',
+            'NLS1': 'Galaxy',
+            'None': 'Unknown',
+            'Nova': 'Star',
+            'Q': 'Galaxy',
+            'QSO': 'Galaxy',
+            'SLSN-I': 'SLSN',
+            'SLSN-I.5': 'SLSN',
+            'SLSN-II': 'SLSN',
+            'SLSN-R': 'SLSN',
+            'SN': 'Unknown',
+            'SNII': 'SNII',
+            'SNII-pec': 'SNII',
+            'SNIIL': 'SNII',
+            'SNIIP': 'SNII',
+            'SNIIb': 'SNII',
+            'SNIIn': 'SNII',
+            'SNIa': 'SNIa',
+            'SNIa-91T': 'SNIa',
+            'SNIa-91T-like': 'SNIa',
+            'SNIa-91bg': 'SNIa',
+            'SNIa-99aa': 'SNIa',
+            'SNIa-CSM': 'SNIa',
+            'SNIa-norm': 'SNIa',
+            'SNIa-pec': 'SNIa',
+            'SNIa00cx-like': 'SNIa',
+            'SNIa02cx-like': 'SNIa',
+            'SNIa02ic-like': 'SNIa',
+            'SNIa91T': 'SNIa',
+            'SNIa91T-like': 'SNIa',
+            'SNIa91bg-like': 'SNIa',
+            'SNIapec': 'SNIa',
+            'SNIax': 'SNIa',
+            'SNIb': 'SNIbc',
+            'SNIb/c': 'SNIbc',
+            'SNIbn': 'SNIbc',
+            'SNIbpec': 'SNIbc',
+            'SNIc': 'SNIbc',
+            'SNIc-BL': 'SNIbc',
+            'SNIc-broad': 'SNIbc',
+            'Star': 'Star',
+            'TDE': 'TDE',
+            'Var': 'Star',
+            'asteroid': 'Asteroid',
+            'blazar': 'Galaxy',
+            'bogus': 'Bad',
+            'duplicate': 'Bad',
+            'galaxy': 'Galaxy',
+            'nan': 'Unknown',
+            'nova': 'Star',
+            'old': 'Bad',
+            'rock': 'Asteroid',
+            'star': 'Star',
+            'stellar': 'Star',
+            'unclassified': 'Unknown',
+            'unk': 'Unknown',
+            'unknown': 'Unknown',
+            'Unknown': 'Unknown',
+            'varstar': 'Star',
+        }
 
     dataset.meta['original_type'] = dataset.meta['type']
     dataset.meta['type'] = [label_map[i] for i in types]
 
     # Drop light curves that aren't supernova-like
-    valid_classes = [
-        'SNIa',
-        'SNII',
-        'Unknown',
-        # 'Galaxy',
-        'SNIbc',
-        'SLSN',
-        # 'Star',
-        'TDE',
-        # 'Bad',
-        'Peculiar',
-    ]
+    if valid_classes is None:
+        valid_classes = [
+            'SNIa',
+            'SNII',
+            'Unknown',
+            # 'Galaxy',
+            'SNIbc',
+            'SLSN',
+            # 'Star',
+            'TDE',
+            # 'Bad',
+            'Peculiar',
+        ]
     if reject_invalid:
         mask = np.isin(dataset.meta['type'], valid_classes)
         if verbose:
@@ -399,8 +404,7 @@ def parse_plasticc(dataset, reject_invalid=True, verbose=True):
     return dataset
 
 
-def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
-                  require_redshift=True, verbose=True):
+def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True, require_redshift=True, label_map=None, valid_classes=None,verbose=True):
     """Parse a dataset from the lcdata package.
 
     We cut out observations that are not relevant for the ParSNIP model (e.g. galactic
@@ -419,6 +423,9 @@ def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
         Kind of dataset, by default None
     reject_invalid : bool, optional
         Whether to reject invalid light curves, by default True
+    label_map : dict, optional
+        Overwriting the default classification label mapping with
+        a custom dict
     verbose : bool, optional
         If true, print parsing information, by default True
 
@@ -449,11 +456,11 @@ def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
             kind = 'default'
 
     if kind == 'ps1':
-        dataset = parse_ps1(dataset, reject_invalid, verbose)
+        dataset = parse_ps1(dataset=dataset, reject_invalid=reject_invalid, label_map=label_map, verbose=verbose)
     elif kind == 'plasticc':
-        dataset = parse_plasticc(dataset, reject_invalid, verbose)
+        dataset = parse_plasticc(dataset=dataset, reject_invalid=reject_invalid, verbose=verbose)
     elif kind == 'ztf':
-        dataset = parse_ztf(dataset, reject_invalid, verbose)
+        dataset = parse_ztf(dataset=dataset, reject_invalid=reject_invalid, label_map=label_map, valid_classes=valid_classes,verbose=verbose)
     elif kind == 'default':
         # Don't do anything by default
         pass
@@ -478,7 +485,7 @@ def parse_dataset(dataset, path_or_name=None, kind=None, reject_invalid=True,
 
 
 def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
-                 require_redshift=True, verbose=True):
+                 require_redshift=True, label_map=None, valid_classes=None, verbose=True):
     """Load a dataset using the lcdata package.
 
     This can be any lcdata HDF5 dataset. We use `~parse_dataset` to clean things up for
@@ -499,6 +506,9 @@ def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
         See `lcdata.Dataset` for details.
     reject_invalid : bool, optional
         Whether to reject invalid light curves, by default True
+    label_map : dict, optional
+        Overwriting the default classification label mapping with
+        a custom dict
     verbose : bool, optional
         If True, print parsing information, by default True
 
@@ -508,14 +518,21 @@ def load_dataset(path, kind=None, in_memory=True, reject_invalid=True,
         Loaded dataset
     """
     dataset = lcdata.read_hdf5(path, in_memory=in_memory)
-    dataset = parse_dataset(dataset, path, kind=kind, reject_invalid=reject_invalid,
-                            require_redshift=require_redshift, verbose=verbose)
+    dataset = parse_dataset(
+        dataset=dataset,
+        path_or_name=path,
+        kind=kind,
+        reject_invalid=reject_invalid,
+        require_redshift=require_redshift,
+        label_map=label_map,
+        valid_classes=valid_classes,
+        verbose=verbose
+    )
 
     return dataset
 
 
-def load_datasets(dataset_paths, reject_invalid=True, require_redshift=True,
-                  verbose=True):
+def load_datasets(dataset_paths, kind=None, reject_invalid=True, require_redshift=True, label_map=None,valid_classes=None,verbose=True):
     """Load a list of datasets and merge them
 
     Parameters
@@ -533,9 +550,15 @@ def load_datasets(dataset_paths, reject_invalid=True, require_redshift=True,
     # Load the dataset(s).
     datasets = []
     for dataset_name in dataset_paths:
-        datasets.append(load_dataset(dataset_name, reject_invalid=reject_invalid,
-                                     require_redshift=require_redshift,
-                                     verbose=verbose))
+        datasets.append(load_dataset(
+            path=dataset_name,
+            kind=kind,
+            reject_invalid=reject_invalid,
+            require_redshift=require_redshift,
+            label_map=label_map,
+            valid_classes=valid_classes,
+            verbose=verbose
+        ))
 
     # Add all of the datasets together
     dataset = reduce(lambda i, j: i+j, datasets)
