@@ -134,7 +134,7 @@ A classifier can be trained on a set of predictions with::
 
 The classifier can the be used to generate predictions for a new dataset with::
 
-    >>> classifier.predict(new_predictions)
+    >>> classifier.classify(new_predictions)
     object_id SLSN  SNII  SNIIn SNIa  SNIbc
     --------- ----- ----- ----- ----- -----
     PS0909006 0.009 0.025 0.031 0.858 0.077
