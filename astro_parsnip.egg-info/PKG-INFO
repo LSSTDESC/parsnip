@@ -1,0 +1,37 @@
+Metadata-Version: 2.1
+Name: astro-parsnip
+Version: 1.4.1
+Summary: Deep generative modeling of astronomical transient light curves
+Home-page: https://github.com/kboone/parsnip
+Author: Kyle Boone
+Author-email: kyboone@uw.edu
+License: UNKNOWN
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+Provides-Extra: docs
+License-File: LICENSE
+
+# ParSNIP
+
+Deep generative modeling of astronomical transient light curves
+
+[![Documentation Status](https://readthedocs.org/projects/parsnip/badge/?version=latest)](https://parsnip.readthedocs.io/en/latest/?badge=latest)
+
+## About
+
+ParSNIP learns a generative model of transients from a large dataset
+of transient light curves. This code has many applications including
+classification of transients, cosmological distance estimation, and
+identifying novel transients. A full description of the algorithms
+in this code can be found in Boone 2021 (submitted to ApJ).
+
+## Installation and Usage
+
+Instructions on how to install and use ParSNIP can be found on the [ParSNIP
+readthedocs page](https://parsnip.readthedocs.io/en/latest/).
+
+
