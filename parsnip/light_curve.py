@@ -28,7 +28,7 @@ def _determine_time_grid(light_curve):
 
     # Initial guess of the phase. Round everything to 0.1 days, and find the decimal
     # that has the largest count.
-    mode, count = scipy.stats.mode(np.round(sidereal_time % 1 + 0.05, 1))
+    mode, count = scipy.stats.mode(np.round(sidereal_time % 1 + 0.05, 1), keepdims=True)
     guess_offset = mode[0] - 0.05
 
     # Shift everything by the guessed offset
