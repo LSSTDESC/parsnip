@@ -1,5 +1,6 @@
 from tqdm import tqdm
 import functools
+import importlib.resources
 import multiprocessing
 import numpy as np
 import os
@@ -9,7 +10,6 @@ from astropy.cosmology import Planck18
 import astropy.table
 import extinction
 import sncosmo
-import pkg_resources
 import lcdata
 
 import torch
@@ -187,7 +187,7 @@ class ParsnipModel(nn.Module):
         else:
             raise ValueError('Unknown optimizer "{}"'.format(self.settings['optimizer']))
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, factor=self.settings['scheduler_factor'], verbose=True
+            self.optimizer, factor=self.settings['scheduler_factor']
         )
 
         # Send the model weights to the desired device
@@ -1839,15 +1839,19 @@ def load_model(path=None, device='cpu', threads=8):
     # Figure out if we were given the path to a model or a built-in model.
     if '.' not in path:
         # We were given the name of a built-in model.
-        resource_path = f'models/{path}.pt'
-        full_path = pkg_resources.resource_filename('parsnip', resource_path)
-        if not os.path.exists(full_path):
-            raise ValueError(f"No built-in model named '{path}'")
-        path = full_path
+        with importlib.resources.as_file(
+            importlib.resources.files('parsnip') / f'models/{path}.pt'
+        ) as full_path:
+            if not full_path.exists():
+                raise ValueError(f"No built-in model named '{path}'")
+            return _load_model(str(full_path), device, threads)
+    return _load_model(path, device, threads)
 
+
+def _load_model(path, device, threads):
     # Load the model data
     use_device = parse_device(device)
-    settings, state_dict = torch.load(path, use_device)
+    settings, state_dict = torch.load(path, use_device, weights_only=False)
 
     # Instantiate the model
     model = ParsnipModel(path, settings['bands'], use_device, threads, settings)
