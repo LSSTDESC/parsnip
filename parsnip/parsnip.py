@@ -187,7 +187,7 @@ class ParsnipModel(nn.Module):
         else:
             raise ValueError('Unknown optimizer "{}"'.format(self.settings['optimizer']))
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, factor=self.settings['scheduler_factor'], verbose=True
+            self.optimizer, factor=self.settings['scheduler_factor']
         )
 
         # Send the model weights to the desired device
