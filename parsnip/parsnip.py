@@ -1847,7 +1847,7 @@ def load_model(path=None, device='cpu', threads=8):
 
     # Load the model data
     use_device = parse_device(device)
-    settings, state_dict = torch.load(path, use_device)
+    settings, state_dict = torch.load(path, use_device, weights_only=False)
 
     # Instantiate the model
     model = ParsnipModel(path, settings['bands'], use_device, threads, settings)
