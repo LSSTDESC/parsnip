@@ -19,4 +19,4 @@ estimation, and identifying novel transients.
    photoz
    reference
 
-Source code: https://github.com/kboone/parsnip
+Source code: https://github.com/LSSTDESC/parsnip
