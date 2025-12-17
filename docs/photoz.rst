@@ -72,6 +72,6 @@ Figures and analysis
 
 All of the figures and analysis in Boone et al. 2022 (in prep.) can be reproduced with
 `a Jupyter notebook that is available on GitHub
-<https://github.com/kboone/parsnip/tree/main/notebooks/photoz.ipynb>`_. To rerun this
+<https://github.com/LSSTDESC/parsnip/tree/main/notebooks/photoz.ipynb>`_. To rerun this
 notebook on a newly trained model, copy the notebooks folder to the working directory
 and run the notebook from within that folder.

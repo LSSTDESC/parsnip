@@ -108,7 +108,7 @@ Plot the predicted spectrum at a given time::
 
 See the :doc:`reference` page for a list of all of the built-in methods, or the
 `notebooks that were used to make figures for Boone et al.
-2021 <https://github.com/kboone/parsnip/tree/main/notebooks>`_ for examples.
+2021 <https://github.com/LSSTDESC/parsnip/tree/main/notebooks>`_ for examples.
 
 Classifying light curves
 ========================
@@ -145,4 +145,4 @@ The classifier can the be used to generate predictions for a new dataset with::
           ...   ...   ...   ...   ...   ...
 
 For more details and examples, see the `classification demo notebook
-<https://github.com/kboone/parsnip/blob/main/notebooks/classification.ipynb>`_.
+<https://github.com/LSSTDESC/parsnip/blob/main/notebooks/classification.ipynb>`_.

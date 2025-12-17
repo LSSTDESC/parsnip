@@ -107,6 +107,6 @@ Figures and analysis
 ====================
 
 All of the figures and analysis in Boone 2021 were done with `Jupyter notebooks that are
-available on GitHub <https://github.com/kboone/parsnip/tree/main/notebooks>`_. To rerun
+available on GitHub <https://github.com/LSSTDESC/parsnip/tree/main/notebooks>`_. To rerun
 these notebooks, copy the notebooks folder to the working directory and run the
 notebooks from within that folder.
